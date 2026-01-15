@@ -1,3 +1,4 @@
+
 import { DepartmentEnum, Task, TaskStatus } from './types';
 
 // Helper for dates in the cycle Dec 2025 - Mar 2026
@@ -959,7 +960,8 @@ export const MOCK_TASKS: Task[] = [
         id: 'hr-23',
         department: DepartmentEnum.HR_MATERIALS,
         title: 'Limpieza oficinas, salones, áreas comunes (Bitácora)',
-        assignee: 'Joshua',
+        // Fix: Renamed 'assignee' to 'assignee_name'
+        assignee_name: 'Joshua',
         isSpecificTask: true,
         status: TaskStatus.IN_PROGRESS,
         resources: []

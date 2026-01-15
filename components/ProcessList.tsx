@@ -1,23 +1,27 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Task, TaskStatus } from '../types';
+
+import React, { useState, useMemo } from 'react';
+import { Task, TaskStatus, Profile, UserRole, DepartmentEnum } from '../types';
 import { 
   Calendar, 
   User, 
   ChevronDown, 
   ChevronRight, 
   CornerDownRight, 
-  Building2, 
-  Search,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   Edit2,
+  Eye,
+  Check,
+  Search,
+  Layers,
+  List,
+  Target,
+  ArrowUpDown,
   Filter,
   X,
-  Eye,
-  SlidersHorizontal,
-  Check,
-  MoreVertical
+  Settings2,
+  CheckCircle2,
+  RefreshCcw,
+  Clock,
+  Briefcase
 } from 'lucide-react';
 
 interface ProcessListProps {
@@ -26,37 +30,34 @@ interface ProcessListProps {
   onTaskUpdate: (id: string, field: keyof Task, value: any) => void;
   onEdit: (task: Task) => void;
   onView: (task: Task) => void; 
+  currentUser: Profile;
+  showDepartment?: boolean;
 }
 
-type SortKey = 'title' | 'startDate' | 'department' | 'assignee' | 'status' | 'isSpecificTask';
-type SortDirection = 'asc' | 'desc';
+type SortKey = 'title' | 'isSpecificTask' | 'department' | 'endDate' | 'assignee_name' | 'status';
 
-interface SortConfig {
-  key: SortKey | null;
-  direction: SortDirection;
+interface ColumnConfig {
+  id: string;
+  label: string;
+  isDefault: boolean;
 }
 
-interface FilterConfig {
-  status: TaskStatus | 'ALL';
-  type: 'ALL' | 'GENERAL' | 'SPECIFIC';
-  assignee: string | 'ALL';
-}
-
-// Configuration for Visible Columns
-interface ColumnVisibility {
-  startDate: boolean;
-  department: boolean;
-  assignee: boolean;
-  status: boolean;
-  type: boolean;
-}
+const COLUMNS_SCHEMA: ColumnConfig[] = [
+  { id: 'title', label: 'Nombre / Cumplimiento', isDefault: true },
+  { id: 'type', label: 'Tipo', isDefault: true },
+  { id: 'department', label: 'Área', isDefault: true },
+  { id: 'schedule', label: 'Cronograma', isDefault: true },
+  { id: 'assignee', label: 'Responsable', isDefault: false },
+  { id: 'status', label: 'Estado', isDefault: true },
+  { id: 'actions', label: 'Acciones', isDefault: true },
+];
 
 const StatusSelect: React.FC<{ status: TaskStatus; onChange: (s: TaskStatus) => void; compact?: boolean }> = ({ status, onChange, compact }) => {
   const bgStyles = {
-    [TaskStatus.COMPLETED]: 'bg-green-100 text-green-800 border-green-200',
-    [TaskStatus.IN_PROGRESS]: 'bg-blue-100 text-blue-800 border-blue-200',
-    [TaskStatus.PENDING]: 'bg-gray-100 text-gray-800 border-gray-200',
-    [TaskStatus.OVERDUE]: 'bg-red-100 text-red-800 border-red-200',
+    [TaskStatus.COMPLETED]: 'bg-green-50 text-green-700 border-green-200',
+    [TaskStatus.IN_PROGRESS]: 'bg-blue-50 text-blue-700 border-blue-200',
+    [TaskStatus.PENDING]: 'bg-slate-100 text-slate-700 border-slate-200',
+    [TaskStatus.OVERDUE]: 'bg-red-50 text-red-700 border-red-200',
   };
 
   return (
@@ -64,800 +65,374 @@ const StatusSelect: React.FC<{ status: TaskStatus; onChange: (s: TaskStatus) => 
       <select
         value={status}
         onChange={(e) => onChange(e.target.value as TaskStatus)}
-        className={`appearance-none cursor-pointer font-medium border rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500 w-full ${bgStyles[status]} ${compact ? 'text-xs px-2 py-1' : 'text-xs px-3 py-1 pr-6'}`}
+        className={`appearance-none cursor-pointer font-bold border rounded-xl focus:outline-none transition-all w-full ${bgStyles[status]} ${compact ? 'text-[10px] px-2 py-1' : 'text-[11px] px-3 py-1.5 pr-8'}`}
       >
         {Object.values(TaskStatus).map((s) => (
           <option key={s} value={s}>{s}</option>
         ))}
       </select>
-      {!compact && (
-        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1.5 text-current opacity-60">
-          <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-        </div>
-      )}
+      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-current opacity-60">
+        <ChevronDown size={14} />
+      </div>
     </div>
   );
 };
 
-// --- Inline Editable Cell Component ---
-interface EditableCellProps {
-  value: string | undefined;
-  type?: 'text' | 'date';
-  onSave: (val: string) => void;
-  placeholder?: string;
-  className?: string;
-  inputClassName?: string;
-}
-
-const EditableCell: React.FC<EditableCellProps> = ({ 
-  value, 
-  type = 'text', 
-  onSave, 
-  placeholder = '-', 
-  className = '',
-  inputClassName = '' 
-}) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [tempValue, setTempValue] = useState(value || '');
-
-  // Update tempValue if prop changes externally (unless editing)
-  useEffect(() => {
-    if (!isEditing) setTempValue(value || '');
-  }, [value, isEditing]);
-
-  const handleBlur = () => {
-    setIsEditing(false);
-    if (tempValue !== (value || '')) {
-      onSave(tempValue);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.currentTarget.blur(); // Triggers handleBlur
-    } else if (e.key === 'Escape') {
-      setTempValue(value || '');
-      setIsEditing(false);
-    }
-  };
-
-  if (isEditing) {
-    return (
-      <input
-        type={type}
-        autoFocus
-        value={tempValue}
-        onChange={(e) => setTempValue(e.target.value)}
-        onBlur={handleBlur}
-        onKeyDown={handleKeyDown}
-        className={`w-full bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none focus:ring-2 focus:ring-blue-200 text-sm ${inputClassName}`}
-      />
-    );
-  }
-
-  return (
-    <div 
-      onClick={() => setIsEditing(true)} 
-      className={`cursor-text hover:bg-gray-100 rounded px-1.5 py-0.5 border border-transparent hover:border-gray-200 transition-colors truncate ${!value ? 'text-gray-400 italic' : ''} ${className}`}
-      title={value || placeholder}
-    >
-      {value || placeholder}
-    </div>
-  );
-};
-
-// --- MOBILE/TABLET CARD COMPONENT ---
-const MobileTaskCard: React.FC<{
+// Componente para vista de tarjetas optimizado con TODA la información
+const TaskCard: React.FC<{
   task: Task;
-  depth?: number;
-  onStatusChange: (id: string, s: TaskStatus) => void;
-  onTaskUpdate: (id: string, field: keyof Task, value: any) => void;
-  onEdit: (t: Task) => void;
   onView: (t: Task) => void;
-  visibility: ColumnVisibility;
-}> = ({ task, depth = 0, onStatusChange, onTaskUpdate, onEdit, onView, visibility }) => {
-  const [isOpen, setIsOpen] = useState(false); // Collapsed by default on mobile to save space
-  const hasSubtasks = task.subtasks && task.subtasks.length > 0;
-
-  const borderColors = {
-    [TaskStatus.COMPLETED]: 'border-l-green-500',
-    [TaskStatus.IN_PROGRESS]: 'border-l-blue-500',
-    [TaskStatus.PENDING]: 'border-l-gray-400',
-    [TaskStatus.OVERDUE]: 'border-l-red-500',
-  };
+  onEdit: (t: Task) => void;
+  onStatusChange: (id: string, s: TaskStatus) => void;
+  currentUser: Profile;
+}> = ({ task, onView, onEdit, onStatusChange, currentUser }) => {
+  const subtasks = task.subtasks || [];
+  const completedCount = subtasks.filter(s => s.status === TaskStatus.COMPLETED).length;
+  const progress = subtasks.length > 0 ? Math.round((completedCount / subtasks.length) * 100) : 0;
+  const canEdit = currentUser.role !== UserRole.AUXILIAR;
 
   return (
-    <div className={`transition-all w-full ${depth > 0 ? 'ml-4' : ''}`}>
-      <div className={`bg-white rounded-lg shadow-sm border border-gray-200 border-l-4 ${borderColors[task.status]} overflow-hidden`}>
-        {/* Card Header */}
-        <div className="p-4 border-b border-gray-100 flex justify-between items-start">
-          <div className="flex-1 min-w-0 pr-2">
-            <div className="flex items-center space-x-2 mb-1">
-              {depth > 0 && <CornerDownRight size={12} className="text-gray-400" />}
-              {visibility.type && (
-                 <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${task.isSpecificTask ? 'bg-purple-100 text-purple-700' : 'bg-blue-50 text-blue-700'}`}>
-                    {task.isSpecificTask ? 'Tarea' : 'Proceso'}
-                 </span>
-              )}
-               {visibility.status && (
-                <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
-                  {task.status}
-                </span>
-              )}
-            </div>
-            
-            <button 
-              onClick={() => onView(task)}
-              className="text-left font-semibold text-gray-900 text-base leading-tight hover:text-blue-600 transition-colors w-full"
-            >
-              {task.title}
-            </button>
-            <div className="mt-1">
-               <EditableCell 
-                value={task.description} 
-                onSave={(val) => onTaskUpdate(task.id, 'description', val)}
-                placeholder="Sin descripción"
-                className="text-xs text-gray-500"
-              />
-            </div>
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg transition-all duration-300 animate-in fade-in zoom-in-95 group">
+      {/* Header de Tarjeta */}
+      <div className="flex justify-between items-start mb-4 gap-4">
+        <div className="space-y-2 flex-1">
+          <div className="flex flex-wrap gap-1.5">
+             <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider ring-1 ring-inset ${
+                task.isSpecificTask ? 'bg-purple-50 text-purple-700 ring-purple-700/10' : 'bg-blue-50 text-blue-700 ring-blue-700/10'
+             }`}>
+                {task.isSpecificTask ? 'Tarea' : 'Proceso'}
+             </span>
+             <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-bold uppercase tracking-wider">
+                {task.department}
+             </span>
           </div>
-          
-          <div className="flex flex-col items-end space-y-2">
-            {hasSubtasks && (
-              <button onClick={() => setIsOpen(!isOpen)} className="text-gray-400 p-1">
-                {isOpen ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-              </button>
-            )}
-          </div>
+          <h3 className="font-bold text-slate-900 text-base leading-snug cursor-pointer group-hover:text-blue-600 transition-colors" onClick={() => onView(task)}>
+            {task.title}
+          </h3>
         </div>
-
-        {/* Card Body - Grid Layout (2 cols for both mobile and tablet inside card) */}
-        <div className="p-4 grid grid-cols-2 gap-4 text-sm">
-          {visibility.department && (
-            <div className="col-span-2">
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Área / Programa</label>
-              <div className="font-medium text-gray-800">{task.department}</div>
-            </div>
-          )}
-
-          {visibility.assignee && (
-            <div className="col-span-1 md:col-span-2">
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Responsable</label>
-              <EditableCell 
-                value={task.assignee}
-                onSave={(val) => onTaskUpdate(task.id, 'assignee', val)}
-                placeholder="Sin Asignar"
-                className="font-medium text-gray-800"
-              />
-            </div>
-          )}
-
-          {visibility.startDate && (
-            <div className="col-span-1">
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Fecha Inicio</label>
-              <EditableCell 
-                type="date" 
-                value={task.startDate} 
-                onSave={(val) => onTaskUpdate(task.id, 'startDate', val)}
-                placeholder="--"
-                className="text-gray-700"
-              />
-            </div>
-          )}
-
-          {visibility.startDate && (
-            <div className="col-span-1">
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Últ. Actividad / Fin</label>
-              <EditableCell 
-                type="date" 
-                value={task.endDate} 
-                onSave={(val) => onTaskUpdate(task.id, 'endDate', val)}
-                placeholder="--"
-                className="text-gray-700"
-              />
-            </div>
-          )}
-
-          {visibility.status && (
-             <div className="col-span-2 md:col-span-2 mt-1 flex items-end">
-                 <StatusSelect 
-                  status={task.status} 
-                  onChange={(s) => onStatusChange(task.id, s)}
-                  compact={false} 
-                 />
-             </div>
-          )}
-        </div>
-
-        {/* Card Footer Actions */}
-        <div className="bg-gray-50 px-4 py-3 border-t border-gray-100 flex justify-between items-center">
-            <div className="flex space-x-2">
-               <button 
-                onClick={() => onView(task)}
-                className="p-2 rounded bg-white border border-gray-200 text-gray-500 hover:text-green-600 hover:border-green-200 transition-colors"
-                title="Ver Detalles"
-               >
-                 <Eye size={18} />
-               </button>
-               <button 
-                 onClick={() => onEdit(task)}
-                 className="p-2 rounded bg-white border border-gray-200 text-gray-500 hover:text-blue-600 hover:border-blue-200 transition-colors"
-                 title="Editar"
-               >
-                 <Edit2 size={18} />
-               </button>
-            </div>
-            
-            <button 
-              onClick={() => onEdit(task)}
-              className="px-4 py-1.5 bg-gray-800 text-white text-xs font-medium rounded hover:bg-gray-700 transition"
-            >
-              Editar
-            </button>
+        <div className="shrink-0 min-w-[110px]">
+          <StatusSelect status={task.status} onChange={(s) => onStatusChange(task.id, s)} compact />
         </div>
       </div>
 
-      {/* Subtasks */}
-      {isOpen && hasSubtasks && (
-        <div className="mt-2 border-l-2 border-gray-200 pl-2 space-y-3">
-          {task.subtasks?.map(sub => (
-            <MobileTaskCard 
-              key={sub.id} 
-              task={sub} 
-              depth={depth + 1}
-              onStatusChange={onStatusChange}
-              onTaskUpdate={onTaskUpdate}
-              onEdit={onEdit}
-              onView={onView}
-              visibility={visibility}
+      {/* Grid de Información Detallada */}
+      <div className="grid grid-cols-2 gap-y-3 gap-x-4 mb-5 p-3 bg-slate-50 rounded-xl border border-slate-100">
+        <div className="space-y-1">
+          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Calendar size={12} /> Inicio</span>
+          <p className="text-[11px] font-bold text-slate-700">{task.startDate || 'No definida'}</p>
+        </div>
+        <div className="space-y-1">
+          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Check size={12} /> Entrega</span>
+          <p className="text-[11px] font-bold text-slate-700">{task.endDate || 'No definida'}</p>
+        </div>
+        <div className="col-span-2 pt-1 border-t border-slate-200/60">
+          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><User size={12} /> Responsable</span>
+          <p className="text-[11px] font-bold text-slate-700">{task.assignee_name || 'Sin asignar'}</p>
+        </div>
+      </div>
+
+      {/* Barra de Progreso */}
+      {subtasks.length > 0 && (
+        <div className="mb-5">
+          <div className="flex justify-between items-center mb-1.5">
+            <span className="text-[10px] font-bold text-slate-500 uppercase">Cumplimiento del proceso</span>
+            <span className="text-[10px] font-bold text-blue-600">{progress}%</span>
+          </div>
+          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div 
+              className={`h-full transition-all duration-700 rounded-full ${progress === 100 ? 'bg-green-500' : 'bg-blue-600'}`} 
+              style={{ width: `${progress}%` }} 
             />
-          ))}
+          </div>
+          <p className="text-[9px] text-slate-400 mt-1 font-medium">{completedCount} de {subtasks.length} tareas terminadas</p>
         </div>
       )}
+
+      {/* Descripción (si no hay subtareas) */}
+      {subtasks.length === 0 && (
+        <p className="text-xs text-slate-500 mb-5 line-clamp-2 italic leading-relaxed">
+          {task.description || 'Sin notas o descripción técnica adicional.'}
+        </p>
+      )}
+
+      {/* Acciones de Pie de Tarjeta */}
+      <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+        <button onClick={() => onView(task)} className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-blue-600 transition-all">
+          <Eye size={16} /> Ver detalles
+        </button>
+        {canEdit && (
+          <button onClick={() => onEdit(task)} className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-blue-50 hover:text-blue-600 transition-all">
+            <Edit2 size={14} /> Editar
+          </button>
+        )}
+      </div>
     </div>
   );
 };
 
-// --- DESKTOP ROW COMPONENT ---
-const TaskRow: React.FC<{ 
-  task: Task; 
-  depth?: number; 
-  onStatusChange: (id: string, s: TaskStatus) => void;
-  onTaskUpdate: (id: string, field: keyof Task, value: any) => void;
-  onEdit: (t: Task) => void;
-  onView: (t: Task) => void;
-  sortConfig: SortConfig;
-  visibility: ColumnVisibility;
-}> = ({ task, depth = 0, onStatusChange, onTaskUpdate, onEdit, onView, sortConfig, visibility }) => {
-  const [isOpen, setIsOpen] = useState(true);
-  
-  // Sort subtasks if they exist
-  const sortedSubtasks = useMemo(() => {
-    if (!task.subtasks) return [];
-    // Basic sorting for subtasks based on same config
-    return [...task.subtasks].sort((a, b) => {
-      if (!sortConfig.key) return 0;
-      const valA = a[sortConfig.key] || '';
-      const valB = b[sortConfig.key] || '';
-      
-      if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }, [task.subtasks, sortConfig]);
-
-  const hasSubtasks = sortedSubtasks.length > 0;
-  const toggleOpen = () => setIsOpen(!isOpen);
-
-  return (
-    <>
-      <tr className={`hover:bg-gray-50 transition-colors group ${depth > 0 ? 'bg-gray-50/50' : ''}`}>
-        <td className="px-6 py-4">
-          <div className="flex items-start">
-             {/* Indentation for subtasks */}
-            {depth > 0 && (
-              <div className="mr-3 mt-1 flex-shrink-0 text-gray-400" style={{ marginLeft: `${(depth - 1) * 20}px` }}>
-                <CornerDownRight size={16} />
-              </div>
-            )}
-            
-            {/* Expand/Collapse Toggle */}
-            {hasSubtasks ? (
-               <button 
-                onClick={toggleOpen} 
-                className="mr-2 mt-1 text-gray-500 hover:text-blue-600 focus:outline-none"
-              >
-                {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
-            ) : (
-               /* Spacer */
-               hasSubtasks && <div className="w-4 mr-2" />
-            )}
-
-            <div className="flex-1 min-w-0">
-              {/* Clickable Title (View Details) */}
-              <div className={`text-sm ${depth === 0 ? 'font-semibold' : 'font-medium'}`}>
-                <button 
-                  onClick={() => onView(task)}
-                  className={`text-left hover:text-blue-600 hover:underline transition-colors focus:outline-none ${depth === 0 ? 'text-gray-900' : 'text-gray-700'}`}
-                  title="Ver detalles"
-                >
-                  {task.title}
-                </button>
-              </div>
-              
-              <div className="text-xs text-gray-500 mt-1">
-                <EditableCell 
-                  value={task.description} 
-                  onSave={(val) => onTaskUpdate(task.id, 'description', val)}
-                  placeholder="Agregar descripción..."
-                  className="-ml-1.5"
-                  inputClassName="text-xs"
-                />
-              </div>
-            </div>
-          </div>
-        </td>
-        
-        {visibility.startDate && (
-          <td className="px-6 py-4 whitespace-nowrap">
-            <div className="flex flex-col text-sm text-gray-500 space-y-1">
-              <div className="flex items-center">
-                <span className="text-xs w-8 text-gray-400">Inicio:</span>
-                <EditableCell 
-                  type="date" 
-                  value={task.startDate} 
-                  onSave={(val) => onTaskUpdate(task.id, 'startDate', val)}
-                  className="ml-1"
-                  placeholder="Definir"
-                />
-              </div>
-              <div className="flex items-center">
-                <span className="text-xs w-8 text-gray-400">Fin:</span>
-                <EditableCell 
-                  type="date" 
-                  value={task.endDate} 
-                  onSave={(val) => onTaskUpdate(task.id, 'endDate', val)}
-                  className="ml-1"
-                  placeholder="Definir"
-                />
-              </div>
-            </div>
-          </td>
-        )}
-
-        {visibility.department && (
-          <td className="px-6 py-4 whitespace-nowrap">
-            <div className="flex items-center text-sm text-gray-600">
-              <Building2 className="w-4 h-4 mr-2 text-gray-400" />
-              <span className="truncate max-w-[150px]" title={task.department}>
-                {task.department}
-              </span>
-            </div>
-          </td>
-        )}
-
-        {visibility.assignee && (
-          <td className="px-6 py-4 whitespace-nowrap">
-            <div className="flex items-center text-sm text-gray-700">
-              <User className="w-4 h-4 mr-2 text-gray-400 shrink-0" />
-              <div className="min-w-[100px]">
-                <EditableCell 
-                  value={task.assignee}
-                  onSave={(val) => onTaskUpdate(task.id, 'assignee', val)}
-                  placeholder="Asignar"
-                />
-              </div>
-            </div>
-          </td>
-        )}
-
-        {visibility.type && (
-          <td className="px-6 py-4 whitespace-nowrap">
-            <span className={`px-2 py-1 text-xs rounded ${task.isSpecificTask ? 'bg-purple-50 text-purple-700 border border-purple-100' : 'bg-blue-50 text-blue-700 border border-blue-100'}`}>
-              {task.isSpecificTask ? 'Tarea Específica' : 'Proceso General'}
-            </span>
-          </td>
-        )}
-
-        {visibility.status && (
-          <td className="px-6 py-4 whitespace-nowrap">
-            <StatusSelect 
-              status={task.status} 
-              onChange={(s) => onStatusChange(task.id, s)} 
-            />
-          </td>
-        )}
-
-        <td className="px-6 py-4 whitespace-nowrap text-right">
-          <div className="flex items-center justify-end space-x-1">
-            <button 
-              onClick={() => onView(task)}
-              className="text-gray-400 hover:text-green-600 transition-colors p-1 rounded hover:bg-green-50"
-              title="Ver Detalles"
-            >
-              <Eye size={16} />
-            </button>
-            <button 
-              onClick={() => onEdit(task)}
-              className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
-              title="Editar"
-            >
-              <Edit2 size={16} />
-            </button>
-          </div>
-        </td>
-      </tr>
-      
-      {/* Recursive rendering of subtasks */}
-      {isOpen && sortedSubtasks.map(subtask => (
-        <TaskRow 
-          key={subtask.id} 
-          task={subtask} 
-          depth={depth + 1} 
-          onStatusChange={onStatusChange}
-          onTaskUpdate={onTaskUpdate}
-          onEdit={onEdit}
-          onView={onView}
-          sortConfig={sortConfig}
-          visibility={visibility}
-        />
-      ))}
-    </>
-  );
-};
-
-export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange, onTaskUpdate, onEdit, onView }) => {
+export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange, onTaskUpdate, onEdit, onView, currentUser, showDepartment }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<{ key: SortKey, direction: 'asc' | 'desc' } | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showColPicker, setShowColPicker] = useState(false);
   
-  // Visibility State
-  const [showVisibilityMenu, setShowVisibilityMenu] = useState(false);
-  const [visibility, setVisibility] = useState<ColumnVisibility>({
-    startDate: true,
-    department: true,
-    assignee: true,
-    status: true,
-    type: true
-  });
-  const visibilityRef = useRef<HTMLDivElement>(null);
+  const [filterStatus, setFilterStatus] = useState<string>('Todos');
+  const [filterType, setFilterType] = useState<string>('Todos');
+  const [filterDept, setFilterDept] = useState<string>('Todos');
 
-  // Filter State
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
-  const [filters, setFilters] = useState<FilterConfig>({ status: 'ALL', type: 'ALL', assignee: 'ALL' });
-  const filterRef = useRef<HTMLDivElement>(null);
+  const defaultColsIds = useMemo(() => new Set(COLUMNS_SCHEMA.filter(c => c.isDefault).map(c => c.id)), []);
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(defaultColsIds);
 
-  // Close menus on click outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
-        setShowFilterMenu(false);
-      }
-      if (visibilityRef.current && !visibilityRef.current.contains(event.target as Node)) {
-        setShowVisibilityMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const resetToDefaultColumns = () => {
+    setVisibleColumns(new Set(defaultColsIds));
+  };
 
-  const uniqueAssignees = useMemo(() => {
-    const set = new Set<string>();
-    const traverse = (list: Task[]) => {
-      list.forEach(t => {
-        if (t.assignee) set.add(t.assignee);
-        if (t.subtasks) traverse(t.subtasks);
-      });
-    };
-    traverse(tasks);
-    return Array.from(set).sort();
-  }, [tasks]);
+  const toggleColumn = (id: string) => {
+    const next = new Set(visibleColumns);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setVisibleColumns(next);
+  };
 
   const handleSort = (key: SortKey) => {
-    let direction: SortDirection = 'asc';
-    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
       direction = 'desc';
     }
     setSortConfig({ key, direction });
   };
 
-  const toggleColumn = (col: keyof ColumnVisibility) => {
-    setVisibility(prev => ({ ...prev, [col]: !prev[col] }));
-  };
-
   const processedTasks = useMemo(() => {
-    const lowerTerm = searchTerm.toLowerCase();
-    
-    // Recursive Filtering Function
-    const filterRecursive = (list: Task[]): Task[] => {
-      return list.reduce((acc: Task[], t) => {
-        // 1. Text Search
-        const textMatch = 
-          t.title.toLowerCase().includes(lowerTerm) || 
-          t.description?.toLowerCase().includes(lowerTerm) ||
-          t.assignee?.toLowerCase().includes(lowerTerm) ||
-          t.department.toLowerCase().includes(lowerTerm);
+    let result = [...tasks];
+    if (searchTerm) {
+      const lowerTerm = searchTerm.toLowerCase();
+      result = result.filter(t => t.title.toLowerCase().includes(lowerTerm) || t.department.toLowerCase().includes(lowerTerm));
+    }
+    if (filterStatus !== 'Todos') result = result.filter(t => t.status === filterStatus);
+    if (filterType !== 'Todos') {
+      const isTask = filterType === 'Tarea';
+      result = result.filter(t => t.isSpecificTask === isTask);
+    }
+    if (filterDept !== 'Todos') result = result.filter(t => t.department === filterDept);
 
-        // 2. Column Filters
-        const statusMatch = filters.status === 'ALL' || t.status === filters.status;
-        const typeMatch = filters.type === 'ALL' || 
-          (filters.type === 'GENERAL' && !t.isSpecificTask) || 
-          (filters.type === 'SPECIFIC' && t.isSpecificTask);
-        const assigneeMatch = filters.assignee === 'ALL' || t.assignee === filters.assignee;
-
-        const isDirectMatch = textMatch && statusMatch && typeMatch && assigneeMatch;
-
-        // Recursion for subtasks
-        const filteredSubtasks = t.subtasks ? filterRecursive(t.subtasks) : [];
-        
-        // Show if this task matches OR if any subtask matches (to preserve hierarchy)
-        if (isDirectMatch || filteredSubtasks.length > 0) {
-          acc.push({ ...t, subtasks: filteredSubtasks });
-        }
-        return acc;
-      }, []);
-    };
-
-    let filtered = filterRecursive(tasks);
-
-    // 3. Sort (Top Level)
-    if (sortConfig.key) {
-      filtered = [...filtered].sort((a, b) => {
-        const valA = a[sortConfig.key!] || '';
-        const valB = b[sortConfig.key!] || '';
-        
+    if (sortConfig) {
+      result.sort((a, b) => {
+        let valA: any = a[sortConfig.key as keyof Task] || '';
+        let valB: any = b[sortConfig.key as keyof Task] || '';
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
       });
     }
+    return result;
+  }, [tasks, searchTerm, sortConfig, filterStatus, filterType, filterDept]);
 
-    return filtered;
-  }, [tasks, searchTerm, sortConfig, filters]);
-
-  const activeFiltersCount = (filters.status !== 'ALL' ? 1 : 0) + (filters.type !== 'ALL' ? 1 : 0) + (filters.assignee !== 'ALL' ? 1 : 0);
-
-  const SortIcon = ({ colKey }: { colKey: SortKey }) => {
-    if (sortConfig.key !== colKey) return <ArrowUpDown size={14} className="ml-1 text-gray-300" />;
-    return sortConfig.direction === 'asc' 
-      ? <ArrowUp size={14} className="ml-1 text-blue-600" />
-      : <ArrowDown size={14} className="ml-1 text-blue-600" />;
-  };
-
-  const HeaderCell = ({ label, colKey }: { label: string; colKey: SortKey }) => (
-    <th 
-      scope="col" 
-      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
-      onClick={() => handleSort(colKey)}
-    >
-      <div className="flex items-center">
-        {label}
-        <SortIcon colKey={colKey} />
-      </div>
-    </th>
+  const HeaderButton: React.FC<{ label: string, sKey: SortKey }> = ({ label, sKey }) => (
+    <button onClick={() => handleSort(sKey)} className="flex items-center gap-1.5 hover:text-blue-600 transition-colors group">
+      {label}
+      <ArrowUpDown size={12} className={`opacity-0 group-hover:opacity-100 transition-opacity ${sortConfig?.key === sKey ? 'opacity-100 text-blue-600' : ''}`} />
+    </button>
   );
 
   return (
     <div className="space-y-4">
-      {/* Controls Header */}
-      <div className="flex flex-col md:flex-row md:items-center space-y-3 md:space-y-0 md:space-x-3 max-w-full">
-        {/* Search */}
-        <div className="flex-1 flex items-center bg-white p-2 rounded-lg border border-gray-200 shadow-sm min-w-0">
-          <Search size={18} className="text-gray-400 mr-2 ml-1 shrink-0" />
+      {/* Barra de Búsqueda y Herramientas */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
           <input 
-            type="text" 
-            placeholder="Buscar procesos, áreas..." 
-            className="w-full text-sm outline-none text-gray-700 placeholder-gray-400 bg-transparent"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            type="text" placeholder="Filtrar por nombre o área..."
+            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+            value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
           />
-           {searchTerm && (
-            <button onClick={() => setSearchTerm('')} className="text-gray-400 hover:text-gray-600 p-1">
-              <X size={14} />
-            </button>
-          )}
         </div>
+        
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => { setShowFilters(!showFilters); setShowColPicker(false); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
+          >
+            <Filter size={16} /> <span>Filtros</span>
+          </button>
 
-        <div className="flex space-x-2">
-           {/* View Options Menu (Column Visibility) */}
-           <div className="relative" ref={visibilityRef}>
-            <button
-              onClick={() => setShowVisibilityMenu(!showVisibilityMenu)}
-              className={`flex items-center justify-center p-2.5 rounded-lg border transition shadow-sm
-                ${showVisibilityMenu ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
-              title="Editar visualización de columnas"
-            >
-              <SlidersHorizontal size={18} />
-            </button>
-            
-            {showVisibilityMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 p-2 animate-in fade-in slide-in-from-top-2">
-                <div className="flex justify-between items-center px-3 py-2 border-b border-gray-700 mb-2">
-                   <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Ver Columnas</span>
-                   <button 
-                     onClick={() => setVisibility({ startDate: true, department: true, assignee: true, status: true, type: true })}
-                     className="text-[10px] text-blue-400 hover:text-blue-300"
-                   >
-                     Restaurar
-                   </button>
-                </div>
-                <div className="space-y-0.5">
-                   {[
-                     { key: 'status', label: 'Estado' },
-                     { key: 'type', label: 'Tipo' },
-                     { key: 'department', label: 'Área / Programa' },
-                     { key: 'assignee', label: 'Responsable' },
-                     { key: 'startDate', label: 'Fechas' },
-                   ].map((col) => (
-                     <button
-                        key={col.key}
-                        onClick={() => toggleColumn(col.key as keyof ColumnVisibility)}
-                        className="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 rounded-lg transition-colors group"
-                     >
-                       <span className="flex items-center">
-                         <div className={`w-4 h-4 rounded border flex items-center justify-center mr-3 transition-colors ${visibility[col.key as keyof ColumnVisibility] ? 'bg-blue-600 border-blue-600' : 'border-gray-500'}`}>
-                           {visibility[col.key as keyof ColumnVisibility] && <Check size={10} className="text-white" />}
-                         </div>
-                         {col.label}
-                       </span>
-                     </button>
-                   ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Filter Dropdown */}
-          <div className="relative" ref={filterRef}>
-            <button
-              onClick={() => setShowFilterMenu(!showFilterMenu)}
-              className={`flex items-center px-4 py-2.5 rounded-lg border text-sm font-medium transition shadow-sm
-                ${showFilterMenu || activeFiltersCount > 0 
-                  ? 'bg-blue-50 text-blue-700 border-blue-200' 
-                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
-            >
-              <Filter size={18} className="mr-2" />
-              <span className="hidden sm:inline">Filtros</span>
-              {activeFiltersCount > 0 && (
-                <span className="ml-2 bg-blue-600 text-white text-[10px] rounded-full w-5 h-5 flex items-center justify-center">
-                  {activeFiltersCount}
-                </span>
-              )}
-            </button>
-
-            {showFilterMenu && (
-              <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-lg border border-gray-100 z-10 p-4 animate-in fade-in slide-in-from-top-2">
-                <div className="flex justify-between items-center mb-3">
-                  <span className="text-sm font-semibold text-gray-800">Filtros Avanzados</span>
-                  {(activeFiltersCount > 0) && (
-                    <button 
-                      onClick={() => setFilters({ status: 'ALL', type: 'ALL', assignee: 'ALL' })}
-                      className="text-xs text-blue-600 hover:underline"
-                    >
-                      Limpiar todos
-                    </button>
-                  )}
-                </div>
-                
-                <div className="space-y-4">
-                  {/* Status Filter */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Estado</label>
-                    <select
-                      value={filters.status}
-                      onChange={(e) => setFilters({ ...filters, status: e.target.value as TaskStatus | 'ALL' })}
-                      className="w-full text-sm border-gray-300 rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="ALL">Todos los estados</option>
-                      {Object.values(TaskStatus).map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Type Filter */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de Tarea</label>
-                    <select
-                      value={filters.type}
-                      onChange={(e) => setFilters({ ...filters, type: e.target.value as 'ALL' | 'GENERAL' | 'SPECIFIC' })}
-                      className="w-full text-sm border-gray-300 rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="ALL">Todos los tipos</option>
-                      <option value="GENERAL">Procesos Generales</option>
-                      <option value="SPECIFIC">Tareas Específicas</option>
-                    </select>
-                  </div>
-
-                  {/* Assignee Filter */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Responsable</label>
-                    <select
-                      value={filters.assignee}
-                      onChange={(e) => setFilters({ ...filters, assignee: e.target.value })}
-                      className="w-full text-sm border-gray-300 rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="ALL">Cualquier responsable</option>
-                      {uniqueAssignees.map(a => (
-                        <option key={a} value={a}>{a}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <button 
+            onClick={() => { setShowColPicker(!showColPicker); setShowFilters(false); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showColPicker ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
+          >
+            <Settings2 size={16} /> <span>Columnas</span>
+          </button>
         </div>
       </div>
 
-      {/* --- DESKTOP TABLE VIEW --- */}
-      {/* Changed hidden md:block to hidden lg:block */}
-      <div className="hidden lg:block bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+      {/* Popover de Selección de Columnas */}
+      {showColPicker && (
+        <div className="bg-white p-5 rounded-2xl shadow-xl border border-slate-200 animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
+            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Personalizar Columnas de la Tabla</h4>
+            <button 
+              onClick={resetToDefaultColumns}
+              className="flex items-center gap-1.5 text-[10px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-2 py-1 rounded-lg transition-colors"
+            >
+              <RefreshCcw size={12} /> Restablecer predeterminados
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {COLUMNS_SCHEMA.map(col => (
+              <button
+                key={col.id}
+                onClick={() => toggleColumn(col.id)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[10px] font-bold border transition-all ${visibleColumns.has(col.id) ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+              >
+                {visibleColumns.has(col.id) ? <CheckCircle2 size={12} /> : <div className="w-3 h-3 rounded-full border-2 border-slate-200"></div>}
+                {col.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Panel de Filtros Expandible */}
+      {showFilters && (
+        <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-200 animate-in slide-in-from-top-2 duration-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Área Institucional</label>
+            <select 
+              value={filterDept}
+              onChange={e => setFilterDept(e.target.value)}
+              className="block w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold p-2 outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="Todos">Todas las áreas</option>
+              {Object.values(DepartmentEnum).map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado</label>
+            <select 
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+              className="block w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold p-2 outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="Todos">Todos los estados</option>
+              {Object.values(TaskStatus).map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nivel Operativo</label>
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+              {['Todos', 'Proceso', 'Tarea'].map(type => (
+                <button key={type} onClick={() => setFilterType(type)} className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all ${filterType === type ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+             <button onClick={() => { setFilterStatus('Todos'); setFilterType('Todos'); setFilterDept('Todos'); }} className="flex-1 py-2 rounded-lg text-[10px] font-bold text-red-500 border border-red-100 hover:bg-red-50 transition-all">Limpiar filtros</button>
+          </div>
+        </div>
+      )}
+
+      {/* Contenedor de Vista Híbrida (Tabla/Tarjetas) */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        
+        {/* VISTA DESKTOP (TABLA): Scroll horizontal asegurado */}
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="min-w-[1100px] w-full divide-y divide-slate-100">
+            <thead className="bg-slate-50/50">
               <tr>
-                <HeaderCell label="Actividad / Proceso" colKey="title" />
-                {visibility.startDate && <HeaderCell label="Fechas" colKey="startDate" />}
-                {visibility.department && <HeaderCell label="Área" colKey="department" />}
-                {visibility.assignee && <HeaderCell label="Responsable" colKey="assignee" />}
-                {visibility.type && <HeaderCell label="Tipo" colKey="isSpecificTask" />}
-                {visibility.status && <HeaderCell label="Estado" colKey="status" />}
-                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Acciones
-                </th>
+                {visibleColumns.has('title') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Nombre / Cumplimiento" sKey="title" /></th>}
+                {visibleColumns.has('type') && <th className="px-6 py-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Tipo" sKey="isSpecificTask" /></th>}
+                {visibleColumns.has('department') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Área" sKey="department" /></th>}
+                {visibleColumns.has('schedule') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Cronograma" sKey="endDate" /></th>}
+                {visibleColumns.has('assignee') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Responsable" sKey="assignee_name" /></th>}
+                {visibleColumns.has('status') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Estado" sKey="status" /></th>}
+                {visibleColumns.has('actions') && <th className="px-6 py-4 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acciones</th>}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {processedTasks.map((task) => (
-                <TaskRow 
-                  key={task.id} 
-                  task={task} 
-                  onStatusChange={onStatusChange}
-                  onTaskUpdate={onTaskUpdate}
-                  onEdit={onEdit}
-                  onView={onView}
-                  sortConfig={sortConfig}
-                  visibility={visibility}
-                />
-              ))}
-              {processedTasks.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
-                    {searchTerm || activeFiltersCount > 0 
-                      ? 'No se encontraron resultados para tu búsqueda o filtros.' 
-                      : 'No hay procesos registrados para esta área.'}
-                  </td>
-                </tr>
-              )}
+            <tbody className="divide-y divide-slate-100">
+              {processedTasks.map(task => {
+                const completedSub = task.subtasks?.filter(s => s.status === TaskStatus.COMPLETED).length || 0;
+                const totalSub = task.subtasks?.length || 0;
+                const percent = totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0;
+
+                return (
+                  <tr key={task.id} className="hover:bg-slate-50/80 transition-colors group">
+                    {visibleColumns.has('title') && (
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col text-left">
+                          <span className="text-sm font-bold text-slate-900 group-hover:text-blue-600 cursor-pointer transition-colors" onClick={() => onView(task)}>{task.title}</span>
+                          {totalSub > 0 && (
+                            <div className="flex items-center gap-3 mt-1.5">
+                              <div className="w-16 h-1 bg-slate-100 rounded-full"><div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div></div>
+                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tight">{completedSub}/{totalSub} Completados</span>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('type') && (
+                      <td className="px-6 py-4 text-center">
+                        <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider ${task.isSpecificTask ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-700/10' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-700/10'}`}>
+                          {task.isSpecificTask ? 'Tarea' : 'Proceso'}
+                        </span>
+                      </td>
+                    )}
+                    {visibleColumns.has('department') && <td className="px-6 py-4 whitespace-nowrap"><span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">{task.department}</span></td>}
+                    {visibleColumns.has('schedule') && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                         <div className="flex flex-col text-[10px] font-bold space-y-0.5">
+                           <span className="text-slate-400 flex items-center gap-1"><Clock size={10} /> {task.startDate || '--'}</span>
+                           <span className="text-slate-700 flex items-center gap-1"><Check size={10} /> {task.endDate || '--'}</span>
+                         </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('assignee') && <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center gap-1.5"><User size={12} className="text-slate-300"/><span className="text-[11px] font-bold text-slate-600">{task.assignee_name || 'Sin asignar'}</span></div></td>}
+                    {visibleColumns.has('status') && <td className="px-6 py-4"><StatusSelect status={task.status} onChange={(s) => onStatusChange(task.id, s)} /></td>}
+                    {visibleColumns.has('actions') && (
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => onView(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Ver detalle"><Eye size={18} /></button>
+                          {currentUser.role !== UserRole.AUXILIAR && <button onClick={() => onEdit(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Editar"><Edit2 size={16} /></button>}
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
-      </div>
 
-      {/* --- MOBILE/TABLET CARD VIEW --- */}
-      {/* Changed md:hidden to lg:hidden */}
-      <div className="lg:hidden grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-        {processedTasks.map((task) => (
-          <MobileTaskCard 
-            key={task.id} 
-            task={task}
-            onStatusChange={onStatusChange}
-            onTaskUpdate={onTaskUpdate}
-            onEdit={onEdit}
-            onView={onView}
-            visibility={visibility}
-          />
-        ))}
-         {processedTasks.length === 0 && (
-            <div className="col-span-1 md:col-span-2 px-6 py-10 text-center text-gray-500 bg-white rounded-lg border border-dashed border-gray-300">
-              {searchTerm || activeFiltersCount > 0 
-                ? 'No se encontraron resultados.' 
-                : 'No hay datos para mostrar.'}
+        {/* VISTA MÓVIL/TABLET (TARJETAS) */}
+        <div className="lg:hidden p-4 bg-slate-50/40">
+          {/* grid-cols-1 para móvil, md:grid-cols-2 para tablet */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {processedTasks.map(task => (
+              <TaskCard 
+                key={task.id} 
+                task={task} 
+                onView={onView} 
+                onEdit={onEdit} 
+                onStatusChange={onStatusChange} 
+                currentUser={currentUser} 
+              />
+            ))}
+          </div>
+        </div>
+
+        {processedTasks.length === 0 && (
+          <div className="py-24 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
+              <Briefcase size={32} />
             </div>
-          )}
+            <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No se encontraron registros activos</p>
+            <button onClick={() => setSearchTerm('')} className="mt-2 text-blue-600 text-xs font-bold hover:underline">Limpiar búsqueda</button>
+          </div>
+        )}
       </div>
-
     </div>
   );
 };

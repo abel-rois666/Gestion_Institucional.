@@ -1,8 +1,5 @@
 {
   "name": "UniGestor AI",
   "description": "A comprehensive university management system for tracking processes across departments (School Control, Finance, Academic, etc.) with AI-driven efficiency reporting.",
-  "requestFramePermissions": [
-    "camera",
-    "microphone"
-  ]
+  "requestFramePermissions": []
 }
