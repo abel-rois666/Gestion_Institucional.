@@ -1,6 +1,7 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Task, Resource, Report } from '../types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { 
   X, 
   Calendar, 
@@ -24,7 +25,12 @@ import {
   Palette,
   Save,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Loader2,
+  Edit2,
+  AlertTriangle,
+  Download,
+  Play
 } from 'lucide-react';
 import { RichTextEditor } from './RichTextEditor';
 
@@ -33,6 +39,7 @@ interface TaskDetailModalProps {
   onClose: () => void;
   task: Task | null;
   onAddResource: (taskId: string, resource: Resource) => void;
+  onEditResource?: (taskId: string, resource: Resource) => void;
   onDeleteResource: (taskId: string, resourceId: string) => void;
   onReorderResources: (taskId: string, resources: Resource[]) => void;
   availableCategories: string[];
@@ -43,6 +50,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   onClose,
   task,
   onAddResource,
+  onEditResource,
   onDeleteResource,
   onReorderResources,
   availableCategories
@@ -53,17 +61,57 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const [newResName, setNewResName] = useState('');
   const [newResUrl, setNewResUrl] = useState('');
   const [newResCategory, setNewResCategory] = useState('');
+  const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  
   const [activePreview, setActivePreview] = useState<Resource | null>(null);
   const [fullScreenResource, setFullScreenResource] = useState<Resource | null>(null);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   
   // Report States
+  const [reports, setReports] = useState<Report[]>([]);
   const [activeReport, setActiveReport] = useState<Report | null>(null);
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportTitle, setReportTitle] = useState('');
   const [reportContent, setReportContent] = useState('');
+  const [isSavingReport, setIsSavingReport] = useState(false);
+  const [isLoadingReports, setIsLoadingReports] = useState(false);
+
+  // DELETE CONFIRMATION STATE
+  const [pendingDelete, setPendingDelete] = useState<{ type: 'resource' | 'report', id: string, name?: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Cargar reportes cuando se abre la tarea
+  useEffect(() => {
+    if (isOpen && task && isSupabaseConfigured) {
+      const fetchReports = async () => {
+        setIsLoadingReports(true);
+        const { data } = await supabase
+          .from('reports')
+          .select('*')
+          .eq('task_id', task.id)
+          .order('created_at', { ascending: false });
+        
+        if (data) {
+          setReports(data as unknown as Report[]);
+        }
+        setIsLoadingReports(false);
+      };
+      fetchReports();
+    } else if (isOpen && task && !isSupabaseConfigured) {
+       setReports(task.reports || []);
+    }
+  }, [isOpen, task]);
+
+  // Resetear formulario al cerrar o cambiar tab
+  useEffect(() => {
+     if(!isOpen) {
+        setEditingResource(null);
+        setNewResName('');
+        setNewResUrl('');
+        setNewResCategory('');
+        setPendingDelete(null);
+     }
+  }, [isOpen]);
 
   if (!isOpen || !task) return null;
 
@@ -78,18 +126,47 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     return 'LINK';
   };
 
-  const handleAddResource = (e: React.FormEvent) => {
+  const handleResourceSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newResName.trim() || !newResUrl.trim()) return;
+    
     const type = getResourceType(newResUrl);
-    onAddResource(task.id, {
-      id: crypto.randomUUID(),
-      name: newResName,
-      url: newResUrl,
-      type,
-      category: newResCategory || 'Otros'
-    });
+    
+    if (editingResource && onEditResource) {
+        onEditResource(task.id, {
+            ...editingResource,
+            name: newResName,
+            url: newResUrl,
+            type: type,
+            category: newResCategory || 'Otros'
+        });
+        setEditingResource(null);
+    } else {
+        onAddResource(task.id, {
+            id: crypto.randomUUID(),
+            name: newResName,
+            url: newResUrl,
+            type,
+            category: newResCategory || 'Otros'
+        });
+    }
     setNewResName(''); setNewResUrl(''); setNewResCategory('');
+  };
+
+  const startEditingResource = (res: Resource, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setEditingResource(res);
+      setNewResName(res.name);
+      setNewResUrl(res.url);
+      setNewResCategory(res.category || '');
+      setActiveTab('resources');
+  };
+
+  const cancelEditingResource = () => {
+      setEditingResource(null);
+      setNewResName('');
+      setNewResUrl('');
+      setNewResCategory('');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -104,11 +181,48 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           name: file.name,
           url: result,
           type: getResourceType(result, file.name),
-          category: 'Evidencias'
+          category: newResCategory || 'Evidencias'
         });
+        setNewResCategory('');
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  // --- DELETE LOGIC ---
+
+  const requestDelete = (type: 'resource' | 'report', id: string, name: string) => {
+    setPendingDelete({ type, id, name });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+
+    if (pendingDelete.type === 'resource') {
+        onDeleteResource(task.id, pendingDelete.id);
+        if (activePreview?.id === pendingDelete.id) setActivePreview(null);
+    } else {
+        // Eliminar reporte
+        const reportId = pendingDelete.id;
+        
+        // 1. Eliminar de base de datos
+        if (isSupabaseConfigured) {
+             const { error } = await supabase.from('reports').delete().eq('id', reportId);
+             if (error) {
+                 alert('Error al eliminar el reporte de la base de datos.');
+                 setPendingDelete(null);
+                 return;
+             }
+        }
+        
+        // 2. Actualizar estado local
+        setReports(prev => prev.filter(r => r.id !== reportId));
+        if (activeReport?.id === reportId) {
+             setActiveReport(null);
+             setIsEditingReport(false);
+        }
+    }
+    setPendingDelete(null);
   };
 
   // --- Report Actions ---
@@ -119,31 +233,96 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     setIsEditingReport(true);
   };
 
-  const handleSaveReport = () => {
+  const handleEditReport = (rep: Report) => {
+      setActiveReport(rep);
+      setReportTitle(rep.title);
+      setReportContent(rep.content);
+      setIsEditingReport(true);
+  };
+
+  const handleSaveReport = async () => {
     if (!reportTitle.trim()) {
       alert("El reporte necesita un título.");
       return;
     }
-    // In a real app, this would call a prop like onAddReport
-    // For now, we simulate success
-    setIsEditingReport(false);
-    alert("Reporte guardado exitosamente (Simulado)");
+
+    setIsSavingReport(true);
+
+    try {
+      const newReportData = {
+        task_id: task.id,
+        title: reportTitle,
+        content: reportContent,
+        author_id: task.assignee_id || 'system', 
+        author_name: task.assignee_name || 'Sistema'
+      };
+
+      if (isSupabaseConfigured) {
+         let result;
+         if (activeReport?.id) {
+            // Actualizar
+            result = await supabase
+              .from('reports')
+              .update(newReportData)
+              .eq('id', activeReport.id)
+              .select()
+              .single();
+         } else {
+            // Crear
+            result = await supabase
+              .from('reports')
+              .insert(newReportData)
+              .select()
+              .single();
+         }
+
+         if (result.error) throw result.error;
+
+         if (result.data) {
+           setReports(prev => {
+             if (activeReport?.id) {
+               return prev.map(r => r.id === result.data.id ? result.data as unknown as Report : r);
+             }
+             return [result.data as unknown as Report, ...prev];
+           });
+           setActiveReport(result.data as unknown as Report);
+         }
+      } else {
+        // Mock Save
+        const mockReport: Report = {
+            id: activeReport?.id || crypto.randomUUID(),
+            ...newReportData,
+            created_at: new Date().toISOString()
+        };
+        setReports(prev => {
+            if (activeReport?.id) {
+                return prev.map(r => r.id === mockReport.id ? mockReport : r);
+            }
+            return [mockReport, ...prev];
+        });
+        setActiveReport(mockReport);
+      }
+      
+      setIsEditingReport(false);
+    } catch (error: any) {
+      console.error("Error saving report:", error);
+      if (error.code === '42P01') {
+          alert("Error: La tabla 'reports' no existe. Ejecuta el script SQL actualizado.");
+      } else {
+          alert("Error al guardar el reporte.");
+      }
+    } finally {
+      setIsSavingReport(false);
+    }
   };
 
   const openCanva = () => {
-    // Open Canva in a new window with a generic or project-specific link
     window.open('https://www.canva.com/es_mx/crear/', '_blank');
   };
 
-  const getEmbedUrl = (url: string, type: string): string => {
-    try {
-      if (type === 'DRIVE') return url.replace(/\/view.*$/, '/preview').replace(/\/edit.*$/, '/preview');
-      if (type === 'VIDEO') {
-        if (url.includes('watch?v=')) return url.replace('watch?v=', 'embed/');
-        if (url.includes('youtu.be/')) return url.replace('youtu.be/', 'youtube.com/embed/');
-      }
-      return url;
-    } catch (e) { return url; }
+  // Helper para normalizar URLs de Drive antes de renderizar
+  const normalizeDriveUrl = (url: string) => {
+      return url.replace(/\/view.*$/, '/preview').replace(/\/edit.*$/, '/preview');
   };
 
   const ResourceIcon = ({ type }: { type: string }) => {
@@ -156,10 +335,167 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   };
 
+  // Función mejorada para renderizar recursos
+  const renderResourcePreview = (resource: Resource) => {
+    // 1. PRIORIDAD: Si es imagen
+    if (resource.type === 'IMAGE') {
+      return <img src={resource.url} alt="Preview" className="w-full h-full object-contain p-4" />;
+    }
+
+    // 2. PRIORIDAD: Si es enlace de Google Drive (independientemente del tipo 'PDF' o 'DRIVE')
+    // Esto corrige los errores de consola al evitar pasar links de Drive por el visor de Docs.
+    if (resource.url.includes('drive.google.com')) {
+        return (
+          <iframe 
+            src={normalizeDriveUrl(resource.url)} 
+            className="w-full h-full border-none bg-white" 
+            title="Drive Preview"
+            allow="autoplay"
+          />
+        );
+    }
+    
+    // 3. PRIORIDAD: PDF (Solo si NO es Drive)
+    if (resource.type === 'PDF') {
+      // Caso A: Archivo local (Data URI)
+      if (resource.url.startsWith('data:')) {
+         return (
+            <div className="w-full h-full flex flex-col">
+               <object data={resource.url} type="application/pdf" className="w-full h-full flex-1 rounded-b-xl">
+                   {/* Fallback si el navegador no soporta <object> para PDF */}
+                   <div className="flex flex-col items-center justify-center h-full text-slate-500 p-8 text-center bg-slate-50">
+                      <FileText size={48} className="mb-4 text-slate-300" />
+                      <p className="font-bold text-slate-700">Vista previa no disponible.</p>
+                      <p className="text-xs mb-4">Tu navegador no permite visualizar este archivo directamente.</p>
+                      <a 
+                        href={resource.url} 
+                        download={resource.name || "documento.pdf"} 
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                      >
+                        <Download size={14} /> Descargar archivo
+                      </a>
+                   </div>
+               </object>
+            </div>
+         );
+      }
+      
+      // Caso B: URL remota directa a un PDF (NO Drive) -> Usar Google Viewer
+      const encodedUrl = encodeURIComponent(resource.url);
+      return (
+        <iframe 
+          src={`https://docs.google.com/viewer?url=${encodedUrl}&embedded=true`} 
+          className="w-full h-full border-none bg-white" 
+          title="PDF Preview" 
+        />
+      );
+    }
+
+    // 4. PRIORIDAD: VIDEO (YouTube)
+    if (resource.type === 'VIDEO') {
+        let videoId: string | null = null;
+        
+        // Extracción robusta de ID de YouTube incluyendo Shorts
+        const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
+        const match = resource.url.match(regExp);
+        
+        if (match && match[2].length === 11) {
+            videoId = match[2];
+        }
+
+        if (videoId) {
+            // FIX ERROR 153:
+            // 1. Usar 'www.youtube.com' (standard)
+            // 2. Agregar parametro 'origin'
+            const origin = window.location.origin;
+            const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=0&origin=${origin}`;
+            
+            return (
+              <iframe 
+                src={embedUrl} 
+                className="w-full h-full border-none bg-black" 
+                title="Video Preview"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            );
+        }
+
+        // Fallback video externo
+        return (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-black text-white p-8 text-center">
+                <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center mb-4">
+                    <Play size={32} className="ml-1" />
+                </div>
+                <h3 className="text-lg font-bold">Reproducción externa</h3>
+                <p className="text-sm text-slate-400 mt-2 mb-6 max-w-xs">
+                    Este video no se puede insertar directamente.
+                </p>
+                <a 
+                    href={resource.url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-all"
+                >
+                    <ExternalLink size={18} /> Ver video original
+                </a>
+            </div>
+        );
+    }
+
+    // Default (Links genéricos)
+    return (
+      <iframe 
+        src={resource.url}
+        className="w-full h-full border-none bg-white" 
+        title="Preview"
+      />
+    );
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        
+        {/* DELETE CONFIRMATION OVERLAY */}
+        {pendingDelete && (
+           <div className="absolute inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+             <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 border border-slate-200">
+                <div className="flex items-center gap-3 mb-4 text-red-600">
+                   <div className="p-2 bg-red-50 rounded-xl">
+                     <AlertTriangle size={24} />
+                   </div>
+                   <h3 className="text-lg font-bold text-slate-800">¿Eliminar elemento?</h3>
+                </div>
+                
+                <div className="mb-6">
+                  <p className="text-sm text-slate-600">
+                    Estás a punto de eliminar {pendingDelete.type === 'resource' ? 'el recurso' : 'el reporte'}:
+                  </p>
+                  <p className="font-bold text-slate-800 mt-1">"{pendingDelete.name}"</p>
+                  <p className="text-xs text-slate-400 mt-2">Esta acción no se puede deshacer.</p>
+                </div>
+
+                <div className="flex gap-3 justify-end">
+                   <button 
+                    onClick={() => setPendingDelete(null)}
+                    className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200 transition-colors"
+                   >
+                     Cancelar
+                   </button>
+                   <button 
+                    onClick={confirmDelete}
+                    className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-100"
+                   >
+                     Sí, eliminar
+                   </button>
+                </div>
+             </div>
+          </div>
+        )}
+
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 relative">
           
           {/* Header */}
           <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0">
@@ -184,13 +520,20 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               {/* Tab Toggles */}
               <div className="p-4 flex gap-2">
                 <button 
-                  onClick={() => setActiveTab('resources')}
+                  onClick={() => {
+                    setActiveTab('resources');
+                    setActiveReport(null);
+                    setIsEditingReport(false);
+                  }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'resources' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'bg-white text-slate-600 border border-gray-200 hover:bg-gray-100'}`}
                 >
                   <LinkIcon size={14} /> Recursos
                 </button>
                 <button 
-                  onClick={() => setActiveTab('reports')}
+                  onClick={() => {
+                    setActiveTab('reports');
+                    setActivePreview(null);
+                  }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'reports' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'bg-white text-slate-600 border border-gray-200 hover:bg-gray-100'}`}
                 >
                   <FileBarChart size={14} /> Reportes
@@ -202,35 +545,65 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 
                 {activeTab === 'resources' ? (
                   <div className="space-y-4">
-                    {/* Add Resource Card */}
-                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
-                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Añadir Recurso</h4>
-                      <form onSubmit={handleAddResource} className="space-y-2">
+                    {/* Add/Edit Resource Card */}
+                    <div className={`p-4 rounded-xl shadow-sm border space-y-3 transition-colors ${editingResource ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200'}`}>
+                      <div className="flex justify-between items-center">
+                          <h4 className={`text-[10px] font-bold uppercase tracking-widest ${editingResource ? 'text-blue-600' : 'text-slate-400'}`}>
+                              {editingResource ? 'Editando Recurso' : 'Añadir Recurso'}
+                          </h4>
+                          {editingResource && (
+                              <button onClick={cancelEditingResource} className="text-[10px] font-bold text-slate-400 hover:text-red-500">
+                                  Cancelar
+                              </button>
+                          )}
+                      </div>
+                      
+                      <form onSubmit={handleResourceSubmit} className="space-y-2">
                         <input
                           type="text"
                           placeholder="Nombre..."
                           value={newResName}
                           onChange={e => setNewResName(e.target.value)}
-                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500"
+                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent"
                         />
+                        
+                        <select
+                          value={newResCategory}
+                          onChange={e => setNewResCategory(e.target.value)}
+                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent text-slate-600"
+                        >
+                          <option value="">Categoría (Opcional)...</option>
+                          {availableCategories.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+
                         <input
                           type="url"
                           placeholder="URL (Drive, YouTube, etc)..."
                           value={newResUrl}
                           onChange={e => setNewResUrl(e.target.value)}
-                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500"
+                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent"
                         />
-                        <button type="submit" className="w-full bg-blue-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-blue-700 transition-colors">
-                          Vincular Recurso
+                        <button 
+                            type="submit" 
+                            className={`w-full py-1.5 rounded-lg text-[10px] font-bold transition-colors text-white ${editingResource ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-900 hover:bg-slate-800'}`}
+                        >
+                          {editingResource ? 'Guardar Cambios' : 'Vincular Recurso'}
                         </button>
                       </form>
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full bg-slate-100 text-slate-600 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors border border-dashed border-slate-300"
-                      >
-                        <FileUp size={12} className="inline mr-1" /> Subir Archivo
-                      </button>
-                      <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+                      
+                      {!editingResource && (
+                        <>
+                            <button 
+                                onClick={() => fileInputRef.current?.click()}
+                                className="w-full bg-slate-100 text-slate-600 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors border border-dashed border-slate-300"
+                            >
+                                <FileUp size={12} className="inline mr-1" /> Subir Archivo
+                            </button>
+                            <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+                        </>
+                      )}
                     </div>
 
                     {/* Resources List */}
@@ -238,14 +611,44 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       {task.resources?.map((res, index) => (
                         <div 
                           key={res.id} 
-                          onClick={() => { setActivePreview(res); setActiveReport(null); }}
-                          className={`p-3 rounded-xl border cursor-pointer transition-all ${activePreview?.id === res.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-blue-200'}`}
+                          onClick={() => { 
+                            setActivePreview(res); 
+                            setActiveReport(null); 
+                            setIsEditingReport(false);
+                            if (editingResource && editingResource.id !== res.id) cancelEditingResource();
+                          }}
+                          className={`p-3 rounded-xl border cursor-pointer transition-all group ${
+                              activePreview?.id === res.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 
+                              editingResource?.id === res.id ? 'bg-yellow-50 border-yellow-200 ring-1 ring-yellow-200' : 
+                              'bg-white border-gray-100 hover:border-blue-200'
+                          }`}
                         >
                           <div className="flex items-center gap-3">
                              <ResourceIcon type={res.type} />
-                             <div className="truncate">
+                             <div className="truncate flex-1">
                                <p className="text-[11px] font-bold text-slate-800 truncate">{res.name}</p>
                                <p className="text-[9px] text-slate-400 uppercase font-semibold">{res.category || 'Otros'}</p>
+                             </div>
+                             
+                             {/* Actions */}
+                             <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                                <button 
+                                    onClick={(e) => startEditingResource(res, e)}
+                                    className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                                    title="Editar"
+                                >
+                                    <Edit2 size={12} />
+                                </button>
+                                <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      requestDelete('resource', res.id, res.name);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded"
+                                    title="Eliminar"
+                                >
+                                    <Trash2 size={12} />
+                                </button>
                              </div>
                           </div>
                         </div>
@@ -270,20 +673,45 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
                     <div className="space-y-2">
                       <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pt-4">Historial de Reportes</h4>
-                      {/* Simulated Report List */}
-                      {[
-                        { id: '1', title: 'Informe Mensual Ene-2026', created_at: '2026-01-20' },
-                        { id: '2', title: 'Avance de Proceso de Inscripción', created_at: '2026-01-15' }
-                      ].map(rep => (
-                        <div 
-                          key={rep.id} 
-                          onClick={() => { setActiveReport(rep as any); setIsEditingReport(false); setActivePreview(null); }}
-                          className={`p-3 rounded-xl border cursor-pointer transition-all ${activeReport?.id === rep.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-blue-200'}`}
-                        >
-                          <p className="text-[11px] font-bold text-slate-800">{rep.title}</p>
-                          <p className="text-[9px] text-slate-400 mt-1 font-medium">{rep.created_at}</p>
-                        </div>
-                      ))}
+                      
+                      {isLoadingReports ? (
+                         <div className="flex justify-center p-4"><Loader2 className="animate-spin text-slate-400" /></div>
+                      ) : reports.length === 0 ? (
+                         <p className="text-xs text-slate-400 text-center italic py-2">No hay reportes creados.</p>
+                      ) : (
+                        reports.map(rep => (
+                            <div 
+                              key={rep.id} 
+                              onClick={() => { 
+                                setActiveReport(rep); 
+                                setIsEditingReport(false); 
+                                setActivePreview(null); 
+                              }}
+                              className={`p-3 rounded-xl border cursor-pointer transition-all group ${activeReport?.id === rep.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-blue-200'}`}
+                            >
+                              <div className="flex justify-between items-start">
+                                <div className="truncate flex-1">
+                                   <p className="text-[11px] font-bold text-slate-800 truncate">{rep.title}</p>
+                                   <p className="text-[9px] text-slate-400 mt-1 font-medium flex justify-between">
+                                     <span>{new Date(rep.created_at).toLocaleDateString()}</span>
+                                     <span className="opacity-70">{rep.author_name}</span>
+                                   </p>
+                                </div>
+                                
+                                <button 
+                                  onClick={(e) => {
+                                      e.stopPropagation();
+                                      requestDelete('report', rep.id, rep.title);
+                                  }}
+                                  className="ml-2 p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
+                                  title="Eliminar Reporte"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 )}
@@ -293,7 +721,6 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               <div className="p-4 bg-white border-t border-gray-100 text-[10px] text-slate-400">
                  <div className="flex justify-between mb-1">
                    <span>Asignado a:</span>
-                   {/* Fix: Renamed assignee to assignee_name */}
                    <span className="font-bold text-slate-600">{task.assignee_name || 'Sin asignar'}</span>
                  </div>
                  <div className="flex justify-between">
@@ -315,6 +742,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       value={reportTitle}
                       onChange={e => setReportTitle(e.target.value)}
                       className="flex-1 text-lg font-bold outline-none text-slate-800"
+                      autoFocus
                     />
                     <div className="flex gap-2">
                       <button 
@@ -325,9 +753,11 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       </button>
                       <button 
                         onClick={handleSaveReport}
-                        className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-all shadow-md shadow-blue-200"
+                        disabled={isSavingReport}
+                        className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-all shadow-md shadow-blue-200 disabled:opacity-50"
                       >
-                        <Save size={14} /> Guardar Reporte
+                        {isSavingReport ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} 
+                        Guardar Reporte
                       </button>
                     </div>
                   </div>
@@ -341,28 +771,23 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 </div>
               ) : activeReport ? (
                 <div className="h-full bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col animate-in fade-in">
-                  <div className="px-8 py-6 border-b border-gray-100 flex justify-between items-center">
+                  <div className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
                     <div>
                       <h3 className="text-xl font-bold text-slate-800">{activeReport.title}</h3>
-                      {/* Fix: Renamed assignee to assignee_name */}
-                      <p className="text-xs text-slate-400 font-medium">Publicado por {task.assignee_name || 'Administrador'} • {activeReport.created_at}</p>
+                      <p className="text-xs text-slate-400 font-medium">
+                        Publicado por {activeReport.author_name || 'Desconocido'} • {new Date(activeReport.created_at).toLocaleString()}
+                      </p>
                     </div>
                     <button 
-                      onClick={() => { setReportTitle(activeReport.title); setReportContent('<p>Contenido cargado...</p>'); setIsEditingReport(true); }}
+                      onClick={() => handleEditReport(activeReport)}
                       className="flex items-center gap-2 px-4 py-2 text-blue-600 text-xs font-bold hover:bg-blue-50 rounded-lg transition-colors"
                     >
                       <FileText size={14} /> Editar Contenido
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-10 prose prose-slate max-w-none">
-                     {/* Simulated content */}
-                     <h2>Resumen de Operación</h2>
-                     <p>Este es un reporte simulado de la tarea <strong>{task.title}</strong>. El objetivo es documentar los avances estratégicos realizados hasta la fecha.</p>
-                     <ul>
-                       <li>Hito 1: Completado al 100%</li>
-                       <li>Hito 2: En revisión por el área de Dirección</li>
-                       <li>Pendientes: Validación de presupuesto</li>
-                     </ul>
+                     {/* Renderizar HTML del reporte */}
+                     <div dangerouslySetInnerHTML={{ __html: activeReport.content }} />
                   </div>
                 </div>
               ) : activePreview ? (
@@ -382,11 +807,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                     </div>
                   </div>
                   <div className="flex-1 bg-slate-200 relative">
-                    {activePreview.type === 'IMAGE' ? (
-                      <img src={activePreview.url} alt="Preview" className="w-full h-full object-contain p-4" />
-                    ) : (
-                      <iframe src={getEmbedUrl(activePreview.url, activePreview.type)} className="w-full h-full border-none" title="Preview" />
-                    )}
+                     {renderResourcePreview(activePreview)}
                   </div>
                 </div>
               ) : (
@@ -422,11 +843,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           </div>
           <div className="flex-1 p-8">
             <div className="w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden">
-              {fullScreenResource.type === 'IMAGE' ? (
-                <img src={fullScreenResource.url} alt="Full" className="w-full h-full object-contain" />
-              ) : (
-                <iframe src={getEmbedUrl(fullScreenResource.url, fullScreenResource.type)} className="w-full h-full" title="Full View" />
-              )}
+               {renderResourcePreview(fullScreenResource)}
             </div>
           </div>
         </div>

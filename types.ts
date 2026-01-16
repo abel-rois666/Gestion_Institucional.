@@ -28,7 +28,7 @@ export enum TaskStatus {
 export interface ResourceCategory {
   id: string;
   name: string;
-  owner_id?: string; // Para que coordinadores solo editen las suyas
+  owner_id?: string;
   is_global: boolean;
 }
 
@@ -57,13 +57,31 @@ export interface Task {
   description?: string;
   startDate?: string;
   endDate?: string;
-  assignee_id?: string; // ID del usuario asignado
+  assignee_id?: string;
   assignee_name?: string; 
   isSpecificTask: boolean;
   status: TaskStatus;
   subtasks?: Task[]; 
   resources?: Resource[];
   reports?: Report[];
+}
+
+export interface EventCategory {
+  id: string;
+  name: string;
+  color: string; // 'blue', 'red', 'green', 'purple', 'orange', 'pink', 'gray'
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  description?: string;
+  start_date: string; // ISO String
+  end_date?: string; // ISO String
+  department: Department;
+  category_id: string; // Referencia a EventCategory
+  is_global: boolean;
+  created_by?: string;
 }
 
 export interface Profile {
@@ -80,6 +98,7 @@ export interface AppSettings {
   logoUrl: string;
   timeZone: string;
   resourceCategories: ResourceCategory[];
+  departmentConfigs: Record<string, { enableEvents: boolean }>;
 }
 
 export interface Channel {
@@ -88,6 +107,8 @@ export interface Channel {
   slug: string;
   description?: string;
   department_restricted?: string;
+  type: 'public' | 'dm';
+  created_by?: string;
 }
 
 export interface Message {

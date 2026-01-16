@@ -1,6 +1,6 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { DepartmentEnum, Task, TaskStatus, AppSettings, Resource, Profile, UserRole, ResourceCategory } from './types';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { DepartmentEnum, Task, TaskStatus, AppSettings, Resource, Profile, UserRole, ResourceCategory, CalendarEvent, EventCategory } from './types';
 import { MOCK_TASKS } from './constants';
 import { ProcessList } from './components/ProcessList';
 import { KPIDashboard } from './components/KPIDashboard';
@@ -10,7 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { TaskDetailModal } from './components/TaskDetailModal';
 import { CalendarView } from './components/CalendarView';
 import { ChatView } from './components/ChatView';
-import { UserManagementModal } from './components/UserManagementModal';
+import { WelcomeSummaryModal } from './components/WelcomeSummaryModal';
 import { generateEfficiencyReport } from './services/geminiService';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { 
@@ -34,7 +34,13 @@ import {
   PanelLeftClose,
   ChevronRight,
   X,
-  LogOut
+  LogOut,
+  Wifi,
+  WifiOff,
+  Database,
+  Bell,
+  Check,
+  Clock
 } from 'lucide-react';
 
 const DEFAULT_ICONS: Record<string, React.ReactNode> = {
@@ -55,13 +61,14 @@ interface NavItemProps {
   isActive: boolean;
   onClick: () => void;
   isCollapsed: boolean;
+  badge?: number;
 }
 
-const NavItem: React.FC<NavItemProps> = ({ id, label, icon, isActive, onClick, isCollapsed }) => (
+const NavItem: React.FC<NavItemProps> = ({ id, label, icon, isActive, onClick, isCollapsed, badge }) => (
   <button
     onClick={onClick}
     title={isCollapsed ? label : undefined}
-    className={`w-full flex items-center py-3.5 text-sm font-semibold transition-all duration-200 active:scale-95 ${
+    className={`w-full flex items-center py-3.5 text-sm font-semibold transition-all duration-200 active:scale-95 relative group ${
       isCollapsed ? 'justify-center px-2' : 'px-4 text-left'
     } ${
       isActive
@@ -69,7 +76,7 @@ const NavItem: React.FC<NavItemProps> = ({ id, label, icon, isActive, onClick, i
         : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
     } rounded-xl mb-1`}
   >
-    <span className={`${isCollapsed ? '' : 'mr-3'} shrink-0 transition-transform duration-200 ${isActive ? 'text-blue-600' : 'text-slate-400'}`}>
+    <span className={`${isCollapsed ? '' : 'mr-3'} shrink-0 transition-transform duration-200 ${isActive ? 'text-blue-600' : 'text-slate-400 group-hover:text-blue-500'}`}>
       {icon}
     </span>
     <span className={`leading-tight transition-all duration-300 ${
@@ -80,8 +87,50 @@ const NavItem: React.FC<NavItemProps> = ({ id, label, icon, isActive, onClick, i
       {label}
     </span>
     {!isCollapsed && isActive && <ChevronRight size={14} className="ml-auto opacity-40" />}
+    
+    {/* Badge Logic */}
+    {badge && badge > 0 ? (
+      <span className={`absolute ${isCollapsed ? 'top-2 right-2' : 'right-3'} bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm animate-pulse`}>
+        {badge > 99 ? '99+' : badge}
+      </span>
+    ) : null}
   </button>
 );
+
+// Sonido de notificación simple usando el oscilador del navegador
+const playNotificationSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(500, audioCtx.currentTime); 
+    oscillator.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.1); 
+    
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+    
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.5);
+  } catch (e) {
+    console.error("No se pudo reproducir el sonido:", e);
+  }
+};
+
+// Interface para notificaciones detalladas
+interface NotificationItem {
+  id: string; // message id
+  sender_name: string;
+  avatar_url: string;
+  content: string;
+  created_at: string;
+}
 
 function App() {
   const [users, setUsers] = useState<Profile[]>([
@@ -99,11 +148,22 @@ function App() {
       { id: 'c1', name: 'Formatos Oficiales', is_global: true },
       { id: 'c2', name: 'Normatividad', is_global: true },
       { id: 'c3', name: 'Evidencias', is_global: true }
-    ]
+    ],
+    departmentConfigs: {
+       [DepartmentEnum.LINKAGE]: { enableEvents: true },
+       [DepartmentEnum.PUBLICITY]: { enableEvents: true },
+       [DepartmentEnum.FINANCE]: { enableEvents: true },
+       [DepartmentEnum.ACADEMIC]: { enableEvents: true },
+       [DepartmentEnum.TUTORING_WELLBEING]: { enableEvents: true },
+       [DepartmentEnum.DIRECTION]: { enableEvents: true },
+    }
   });
 
   const [departments, setDepartments] = useState<string[]>(Object.values(DepartmentEnum));
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]); 
+  const [eventCategories, setEventCategories] = useState<EventCategory[]>([]); // New State
+  
   const [activeTab, setActiveTab] = useState<string>('General');
   const [viewMode, setViewMode] = useState<'LIST' | 'CALENDAR' | 'CHAT'>('LIST');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -113,9 +173,108 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isUserMgmtOpen, setIsUserMgmtOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
   const [taskToView, setTaskToView] = useState<Task | null>(null);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+
+  // --- WELCOME MODAL STATE ---
+  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
+  const [welcomeOverdueTasks, setWelcomeOverdueTasks] = useState<Task[]>([]);
+  const [welcomeUpcomingTasks, setWelcomeUpcomingTasks] = useState<Task[]>([]);
+
+  // --- NOTIFICATION STATE ---
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [isNotifDropdownOpen, setIsNotifDropdownOpen] = useState(false);
+  const notifDropdownRef = useRef<HTMLDivElement>(null);
+
+  const [toastNotification, setToastNotification] = useState<{ visible: boolean, title: string, message: string, avatar?: string } | null>(null);
+
+  const unreadCount = notifications.length;
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (notifDropdownRef.current && !notifDropdownRef.current.contains(event.target as Node)) {
+        setIsNotifDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const getAllTasks = (taskList: Task[]): Task[] => {
+    let all: Task[] = [];
+    taskList.forEach(t => {
+      all.push(t);
+      if (t.subtasks && t.subtasks.length > 0) {
+        all = all.concat(getAllTasks(t.subtasks));
+      }
+    });
+    return all;
+  };
+
+  useEffect(() => {
+    if (isLoadingTasks) return;
+
+    const allFlatTasks = getAllTasks(tasks);
+    const myTasks = allFlatTasks.filter(t => {
+       if (currentUser.role === UserRole.AUXILIAR) {
+          return t.assignee_id === currentUser.id;
+       }
+       return t.department === currentUser.department || t.assignee_id === currentUser.id;
+    });
+
+    const now = new Date();
+    now.setHours(0,0,0,0);
+
+    const overdue: Task[] = [];
+    const upcoming: Task[] = [];
+
+    myTasks.forEach(task => {
+       if (task.status === TaskStatus.COMPLETED) return;
+       if (!task.endDate) return;
+
+       const [y, m, d] = task.endDate.split('-').map(Number);
+       const endDate = new Date(y, m - 1, d); 
+       
+       const diffTime = endDate.getTime() - now.getTime();
+       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+       if (diffDays < 0) {
+         overdue.push(task);
+       } else if (diffDays >= 0 && diffDays <= 4) {
+         upcoming.push(task);
+       }
+    });
+
+    setWelcomeOverdueTasks(overdue);
+    setWelcomeUpcomingTasks(upcoming);
+
+    if (overdue.length > 0 || upcoming.length > 0) {
+      setIsWelcomeModalOpen(true);
+    }
+  }, [tasks, isLoadingTasks, currentUser]);
+
+  const departmentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const all = getAllTasks(tasks);
+    all.forEach(t => {
+      counts[t.department] = (counts[t.department] || 0) + 1;
+    });
+    return counts;
+  }, [tasks]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const all = getAllTasks(tasks);
+    all.forEach(t => {
+      t.resources?.forEach(r => {
+        if (r.category) {
+          counts[r.category] = (counts[r.category] || 0) + 1;
+        }
+      });
+    });
+    return counts;
+  }, [tasks]);
 
   const filteredDepartments = useMemo(() => {
     if (currentUser.role === UserRole.ADMIN) return departments;
@@ -134,7 +293,8 @@ function App() {
     isSpecificTask: dbTask.is_specific_task,
     status: dbTask.status as TaskStatus,
     subtasks: dbTask.subtasks ? dbTask.subtasks.map(mapDbTaskToTask) : [],
-    resources: dbTask.resources || []
+    resources: dbTask.resources || [],
+    reports: dbTask.reports || []
   });
 
   const fetchTasks = async () => {
@@ -142,13 +302,114 @@ function App() {
       if (tasks.length === 0) setTasks(MOCK_TASKS);
       return;
     }
+    setIsLoadingTasks(true);
     try {
-      const { data, error } = await supabase.from('tasks').select('*, subtasks:tasks(*), resources(*)').is('parent_id', null).order('created_at', { ascending: false });
-      if (!error && data) setTasks(data.map(mapDbTaskToTask));
-    } catch (err) { console.error(err); }
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*, subtasks:tasks(*), resources(*), reports(*)')
+        .is('parent_id', null)
+        .order('created_at', { ascending: false });
+      
+      if (!error && data) {
+        setTasks(data.map(mapDbTaskToTask));
+      } else {
+        console.error("Error fetching tasks:", error);
+      }
+    } catch (err) { 
+      console.error(err); 
+    } finally {
+      setIsLoadingTasks(false);
+    }
   };
 
-  useEffect(() => { fetchTasks(); }, []);
+  const fetchEvents = async () => {
+     if (!isSupabaseConfigured) return;
+     try {
+       const { data, error } = await supabase.from('calendar_events').select('*');
+       if (!error && data) setEvents(data);
+     } catch(e) { console.error("Error fetching events", e); }
+  };
+
+  const fetchEventCategories = async () => {
+    if (!isSupabaseConfigured) {
+        // Fallback Mock Categories
+        if(eventCategories.length === 0) {
+            setEventCategories([
+                { id: '1', name: 'Académico', color: 'blue' },
+                { id: '2', name: 'Festivo', color: 'red' },
+                { id: '3', name: 'Reunión', color: 'purple' },
+            ]);
+        }
+        return;
+    }
+    try {
+      const { data, error } = await supabase.from('event_categories').select('*');
+      if (!error && data) setEventCategories(data);
+    } catch(e) { console.error(e); }
+  };
+
+  useEffect(() => { 
+      fetchTasks(); 
+      fetchEvents(); 
+      fetchEventCategories();
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    if (viewMode === 'CHAT') {
+      setNotifications([]);
+    }
+
+    const channel = supabase
+      .channel('global-notifications')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        async (payload) => {
+          const newMessage = payload.new;
+          if (newMessage.user_id === currentUser.id) return;
+
+          if (viewMode !== 'CHAT') {
+            playNotificationSound();
+            const { data: sender } = await supabase
+              .from('profiles')
+              .select('full_name, avatar_url')
+              .eq('id', newMessage.user_id)
+              .single();
+
+            const senderName = sender?.full_name || 'Alguien';
+            const senderAvatar = sender?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${senderName}`;
+            
+            const newItem: NotificationItem = {
+              id: newMessage.id,
+              sender_name: senderName,
+              avatar_url: senderAvatar,
+              content: newMessage.content,
+              created_at: newMessage.created_at
+            };
+            
+            setNotifications(prev => [newItem, ...prev]);
+
+            setToastNotification({
+              visible: true,
+              title: `Nuevo mensaje de ${senderName}`,
+              message: newMessage.content,
+              avatar: senderAvatar
+            });
+
+            setTimeout(() => {
+              setToastNotification(null);
+            }, 5000);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser.id, viewMode]);
+
 
   const filteredTasks = useMemo(() => {
     let result = tasks;
@@ -157,6 +418,15 @@ function App() {
     if (activeTab !== 'General') result = result.filter(t => t.department === activeTab);
     return result;
   }, [tasks, activeTab, currentUser]);
+
+  const filteredEvents = useMemo(() => {
+     let result = events;
+     if (activeTab !== 'General') {
+         // Show global events + department specific events
+         result = result.filter(e => e.is_global || e.department === activeTab);
+     }
+     return result;
+  }, [events, activeTab]);
 
   const handleSaveTask = async (taskData: Task, parentId?: string) => {
     if (!isSupabaseConfigured) {
@@ -190,6 +460,78 @@ function App() {
     } catch (err) { console.error(err); }
   };
 
+  const handleSaveEvent = async (event: Partial<CalendarEvent>) => {
+      const newEvent = { ...event, created_by: currentUser.id };
+      
+      if (!isSupabaseConfigured) {
+          setEvents(prev => [...prev, { ...newEvent, id: crypto.randomUUID() } as CalendarEvent]);
+          return;
+      }
+
+      try {
+          const { error } = await supabase.from('calendar_events').insert(newEvent);
+          if (error) throw error;
+          fetchEvents();
+      } catch (e) {
+          alert("Error al guardar evento.");
+      }
+  };
+
+  const handleDeleteEvent = async (id: string) => {
+      if(!confirm("¿Seguro que deseas eliminar este evento?")) return;
+
+      if (!isSupabaseConfigured) {
+          setEvents(prev => prev.filter(e => e.id !== id));
+          return;
+      }
+
+      try {
+          const { error } = await supabase.from('calendar_events').delete().eq('id', id);
+          if (error) throw error;
+          fetchEvents();
+      } catch(e) {
+          alert("Error al eliminar evento.");
+      }
+  }
+
+  // --- Event Category Handlers ---
+  const handleSaveEventCategory = async (category: EventCategory) => {
+    if (!isSupabaseConfigured) {
+        setEventCategories(prev => {
+            const exists = prev.find(c => c.id === category.id);
+            if(exists) return prev.map(c => c.id === category.id ? category : c);
+            return [...prev, category];
+        });
+        return;
+    }
+    try {
+        const { error } = await supabase.from('event_categories').upsert(category);
+        if(error) throw error;
+        fetchEventCategories();
+    } catch(e) {
+        console.error(e);
+        alert("Error al guardar categoría de evento.");
+    }
+  };
+
+  const handleDeleteEventCategory = async (id: string) => {
+      if(!confirm("¿Eliminar categoría? Los eventos asociados perderán su clasificación.")) return;
+      
+      if (!isSupabaseConfigured) {
+          setEventCategories(prev => prev.filter(c => c.id !== id));
+          return;
+      }
+      try {
+          const { error } = await supabase.from('event_categories').delete().eq('id', id);
+          if(error) throw error;
+          fetchEventCategories();
+      } catch(e) {
+          console.error(e);
+          alert("Error al eliminar categoría.");
+      }
+  };
+
+  // ... (Rest of existing handlers: handleStatusChange, etc. - kept as is)
   const handleStatusChange = async (taskId: string, newStatus: TaskStatus) => {
     if (!isSupabaseConfigured) {
       const updateRecursive = (list: Task[]): Task[] => list.map(t => {
@@ -241,6 +583,127 @@ function App() {
     fetchTasks();
   };
 
+  const handleRenameDepartment = (oldName: string, newName: string) => {
+    setDepartments(prev => prev.map(d => d === oldName ? newName : d));
+    const updateTasksRecursive = (list: Task[]): Task[] => list.map(t => {
+      const updatedT = t.department === oldName ? { ...t, department: newName } : t;
+      if (updatedT.subtasks) {
+        updatedT.subtasks = updateTasksRecursive(updatedT.subtasks);
+      }
+      return updatedT;
+    });
+    setTasks(prev => updateTasksRecursive(prev));
+  };
+
+  const handleRenameCategory = (oldName: string, newName: string) => {
+    setAppConfig(prev => ({
+      ...prev,
+      resourceCategories: prev.resourceCategories.map(c => c.name === oldName ? { ...c, name: newName } : c)
+    }));
+    const updateTasksRecursive = (list: Task[]): Task[] => list.map(t => {
+      const updatedResources = t.resources?.map(r => r.category === oldName ? { ...r, category: newName } : r);
+      let updatedT = { ...t, resources: updatedResources };
+      if (updatedT.subtasks) {
+        updatedT.subtasks = updateTasksRecursive(updatedT.subtasks);
+      }
+      return updatedT;
+    });
+    setTasks(prev => updateTasksRecursive(prev));
+  };
+
+  const handleAddResource = async (taskId: string, resource: Resource) => {
+    if (taskToView && taskToView.id === taskId) {
+       setTaskToView(prev => prev ? { ...prev, resources: [...(prev.resources || []), resource] } : null);
+    }
+    if (!isSupabaseConfigured) {
+      setTasks(prev => {
+        const updateRecursive = (list: Task[]): Task[] => list.map(t => {
+            if (t.id === taskId) return { ...t, resources: [...(t.resources || []), resource] };
+            if (t.subtasks) return { ...t, subtasks: updateRecursive(t.subtasks) };
+            return t;
+        });
+        return updateRecursive(prev);
+      });
+      return;
+    }
+    try {
+      const { error } = await supabase.from('resources').insert({
+        id: resource.id,
+        task_id: taskId,
+        name: resource.name,
+        url: resource.url,
+        type: resource.type,
+        category: resource.category
+      });
+      if (error) throw error;
+      fetchTasks();
+    } catch (e) {
+      console.error(e);
+      alert("Error al guardar el recurso en la base de datos.");
+    }
+  };
+
+  const handleEditResource = async (taskId: string, updatedResource: Resource) => {
+    if (taskToView && taskToView.id === taskId) {
+       setTaskToView(prev => prev ? { ...prev, resources: prev.resources?.map(r => r.id === updatedResource.id ? updatedResource : r) } : null);
+    }
+    if (!isSupabaseConfigured) {
+      setTasks(prev => {
+        const updateRecursive = (list: Task[]): Task[] => list.map(t => {
+            if (t.id === taskId) return { ...t, resources: t.resources?.map(r => r.id === updatedResource.id ? updatedResource : r) };
+            if (t.subtasks) return { ...t, subtasks: updateRecursive(t.subtasks) };
+            return t;
+        });
+        return updateRecursive(prev);
+      });
+      return;
+    }
+    try {
+      const { error } = await supabase.from('resources').update({
+        name: updatedResource.name,
+        url: updatedResource.url,
+        type: updatedResource.type,
+        category: updatedResource.category
+      }).eq('id', updatedResource.id);
+      if (error) throw error;
+      fetchTasks(); 
+    } catch (e) {
+      console.error(e);
+      alert("Error al actualizar el recurso.");
+    }
+  };
+
+  const handleDeleteResource = async (taskId: string, resourceId: string) => {
+     if (taskToView && taskToView.id === taskId) {
+        setTaskToView(prev => prev ? { ...prev, resources: prev.resources?.filter(r => r.id !== resourceId) } : null);
+     }
+     if (!isSupabaseConfigured) {
+        setTasks(prev => {
+           const updateRecursive = (list: Task[]): Task[] => list.map(t => {
+               if (t.id === taskId) return { ...t, resources: t.resources?.filter(r => r.id !== resourceId) };
+               if (t.subtasks) return { ...t, subtasks: updateRecursive(t.subtasks) };
+               return t;
+           });
+           return updateRecursive(prev);
+        });
+        return;
+     }
+     try {
+       const { error } = await supabase.from('resources').delete().eq('id', resourceId);
+       if(error) throw error;
+       fetchTasks();
+     } catch(e) {
+       console.error(e);
+       alert("Error al eliminar recurso.");
+     }
+  };
+
+  const handleReorderResources = (taskId: string, resources: Resource[]) => {
+      if (taskToView && taskToView.id === taskId) {
+         setTaskToView({ ...taskToView, resources });
+      }
+  };
+
   const handleEditClick = (task: Task) => {
     setTaskToEdit(task);
     setIsEditModalOpen(true);
@@ -255,10 +718,93 @@ function App() {
       setAiReport(report);
     } catch (e) { setAiReport("Error."); } finally { setIsGenerating(false); }
   };
+  
+  const handleSaveUser = (user: Profile) => {
+    setUsers(prev => {
+      const exists = prev.find(u => u.id === user.id);
+      if (exists) {
+        return prev.map(u => u.id === user.id ? user : u);
+      }
+      return [...prev, user];
+    });
+  };
+
+  const handleDeleteUser = (userId: string) => {
+    setUsers(prev => prev.filter(u => u.id !== userId));
+  };
+
+  const handleNotificationClick = (notifId: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== notifId));
+    setViewMode('CHAT');
+    setIsNotifDropdownOpen(false);
+  };
+
+  const markAllAsRead = () => {
+    setNotifications([]);
+    setIsNotifDropdownOpen(false);
+  };
+
+  const handleAddEvent = async (date: Date) => {
+      // Prompt for title
+      const title = prompt("Título del evento:");
+      if (!title) return;
+      const desc = prompt("Descripción (opcional):") || '';
+      
+      // Default to first category if available
+      const defaultCatId = eventCategories.length > 0 ? eventCategories[0].id : '';
+
+      handleSaveEvent({
+          title,
+          description: desc,
+          start_date: date.toISOString(),
+          department: activeTab === 'General' ? DepartmentEnum.DIRECTION : activeTab,
+          category_id: defaultCatId,
+          is_global: activeTab === 'General',
+      });
+  };
+
+  // Check if events are enabled for current tab
+  const isEventsEnabled = activeTab !== 'General' 
+      ? appConfig.departmentConfigs?.[activeTab]?.enableEvents 
+      : Object.values(appConfig.departmentConfigs).some((c: any) => c.enableEvents);
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden relative">
       
+      {/* WELCOME SUMMARY MODAL */}
+      <WelcomeSummaryModal 
+        isOpen={isWelcomeModalOpen}
+        onClose={() => setIsWelcomeModalOpen(false)}
+        overdueTasks={welcomeOverdueTasks}
+        upcomingTasks={welcomeUpcomingTasks}
+        unreadCount={unreadCount}
+        userName={currentUser.full_name}
+        onViewTask={handleViewClick}
+        onGoToChat={() => setViewMode('CHAT')}
+      />
+
+      {/* TOAST DE NOTIFICACIÓN FLOTANTE */}
+      {toastNotification && toastNotification.visible && (
+        <div className="fixed top-4 right-4 z-[100] bg-white border border-blue-100 rounded-2xl shadow-2xl p-4 max-w-sm w-full animate-in slide-in-from-top-4 fade-in duration-300 flex items-start gap-4">
+           <img src={toastNotification.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=User`} alt="Avatar" className="w-10 h-10 rounded-xl bg-slate-100 shadow-sm shrink-0" />
+           <div className="flex-1 overflow-hidden">
+             <div className="flex justify-between items-start">
+                <h4 className="text-sm font-bold text-slate-800 truncate">{toastNotification.title}</h4>
+                <button onClick={() => setToastNotification(null)} className="text-slate-400 hover:text-slate-600"><X size={14} /></button>
+             </div>
+             <p className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+               {toastNotification.message}
+             </p>
+             <button 
+                onClick={() => { setViewMode('CHAT'); setToastNotification(null); }}
+                className="mt-2 text-[10px] font-bold text-blue-600 hover:text-blue-700 hover:underline"
+              >
+               Responder ahora
+             </button>
+           </div>
+        </div>
+      )}
+
       {/* OVERLAY PARA MÓVIL */}
       {isSidebarOpen && (
         <div 
@@ -279,7 +825,10 @@ function App() {
             </div>
             <div className={`ml-3 transition-all duration-300 ${isCollapsed ? 'opacity-0 w-0' : 'opacity-100 w-auto'}`}>
               <span className="text-base font-bold text-slate-800 truncate block leading-tight">{appConfig.appName}</span>
-              <span className="text-[9px] font-bold text-blue-600 uppercase tracking-widest">Enterprise</span>
+              <div className="flex items-center gap-1">
+                <span className="text-[9px] font-bold text-blue-600 uppercase tracking-widest">Enterprise</span>
+                {isSupabaseConfigured ? <Wifi size={10} className="text-green-500" /> : <WifiOff size={10} className="text-slate-300" />}
+              </div>
             </div>
           </div>
           
@@ -294,8 +843,23 @@ function App() {
         </div>
 
         <nav className="mt-4 flex-1 overflow-y-auto px-3 custom-scrollbar overflow-x-hidden">
-          <NavItem id="General" label="Vista General" icon={<LayoutDashboard size={20} />} isActive={activeTab === 'General'} onClick={() => { setActiveTab('General'); setIsSidebarOpen(false); }} isCollapsed={isCollapsed} />
-          <NavItem id="Chat" label="Chat Interno" icon={<MessageSquare size={20} />} isActive={viewMode === 'CHAT'} onClick={() => { setViewMode('CHAT'); setIsSidebarOpen(false); }} isCollapsed={isCollapsed} />
+          <NavItem 
+            id="General" 
+            label="Vista General" 
+            icon={<LayoutDashboard size={20} />} 
+            isActive={activeTab === 'General' && viewMode !== 'CHAT'} 
+            onClick={() => { setActiveTab('General'); setViewMode('LIST'); setIsSidebarOpen(false); }} 
+            isCollapsed={isCollapsed} 
+          />
+          <NavItem 
+            id="Chat" 
+            label="Chat Interno" 
+            icon={<MessageSquare size={20} />} 
+            isActive={viewMode === 'CHAT'} 
+            onClick={() => { setViewMode('CHAT'); setIsSidebarOpen(false); }} 
+            isCollapsed={isCollapsed} 
+            badge={unreadCount} // Muestra el badge rojo si hay mensajes
+          />
           
           <div className={`px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 mt-8 ${isCollapsed ? 'hidden' : ''}`}>Mis Áreas</div>
           
@@ -312,13 +876,6 @@ function App() {
               />
             ))}
           </div>
-
-          {currentUser.role === UserRole.ADMIN && (
-            <>
-              <div className={`px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 mt-8 ${isCollapsed ? 'hidden' : ''}`}>Sistema</div>
-              <NavItem id="Users" label="Gestión de Usuarios" icon={<UsersIcon size={20} />} isActive={false} onClick={() => { setIsUserMgmtOpen(true); setIsSidebarOpen(false); }} isCollapsed={isCollapsed} />
-            </>
-          )}
         </nav>
 
         <div className="p-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
@@ -367,18 +924,119 @@ function App() {
           </div>
           
           <div className="flex items-center gap-2">
+            
+            {/* --- CAMPANA DE NOTIFICACIONES CON DROPDOWN --- */}
+            {viewMode !== 'CHAT' && (
+              <div className="relative" ref={notifDropdownRef}>
+                <button 
+                  onClick={() => setIsNotifDropdownOpen(!isNotifDropdownOpen)}
+                  className={`relative mr-2 p-2 rounded-xl transition-all ${
+                    isNotifDropdownOpen || unreadCount > 0 
+                      ? 'text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-100' 
+                      : 'text-slate-400 hover:text-blue-600 hover:bg-slate-50'
+                  }`}
+                  title="Notificaciones"
+                >
+                  <Bell size={20} className={unreadCount > 0 ? 'animate-swing' : ''} />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-2 right-2 flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500 border-2 border-white"></span>
+                    </span>
+                  )}
+                </button>
+
+                {/* DROPDOWN DE NOTIFICACIONES */}
+                {isNotifDropdownOpen && (
+                  <div className="absolute top-full right-0 mt-3 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200">
+                    <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-gray-100">
+                      <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Notificaciones</h3>
+                      {unreadCount > 0 && (
+                        <button 
+                          onClick={markAllAsRead}
+                          className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1"
+                        >
+                          <Check size={12} /> Marcar todo
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                      {notifications.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center p-8 text-center">
+                           <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center text-slate-300 mb-3">
+                             <Bell size={20} />
+                           </div>
+                           <p className="text-sm font-bold text-slate-400">Sin mensajes recientes</p>
+                           <p className="text-[10px] text-slate-400 mt-1">¡Estás al día con todo!</p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-gray-50">
+                           {notifications.map(notif => (
+                             <div 
+                                key={notif.id}
+                                onClick={() => handleNotificationClick(notif.id)}
+                                className="p-3 hover:bg-blue-50/50 cursor-pointer transition-colors flex gap-3 group items-start"
+                             >
+                                <img src={notif.avatar_url} alt="Avatar" className="w-9 h-9 rounded-xl bg-slate-100 shrink-0 object-cover shadow-sm" />
+                                <div className="flex-1 overflow-hidden">
+                                  <div className="flex justify-between items-center mb-0.5">
+                                    <p className="text-xs font-bold text-slate-800 truncate">{notif.sender_name}</p>
+                                    <span className="text-[9px] text-slate-400 flex items-center gap-1 shrink-0">
+                                      <Clock size={10} />
+                                      {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-500 truncate line-clamp-2 leading-relaxed group-hover:text-blue-600 transition-colors">
+                                    {notif.content}
+                                  </p>
+                                </div>
+                                <div className="w-2 h-2 rounded-full bg-blue-500 mt-2 shrink-0"></div>
+                             </div>
+                           ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="p-2 bg-slate-50 border-t border-gray-100 text-center">
+                       <button 
+                        onClick={() => { setViewMode('CHAT'); setIsNotifDropdownOpen(false); }}
+                        className="text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors w-full py-1"
+                       >
+                         Ir a Mensajes
+                       </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {currentUser.role !== UserRole.AUXILIAR && viewMode !== 'CHAT' && (
                <button onClick={() => setIsModalOpen(true)} className="flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-100 transition-all active:scale-95">
                  <Plus size={18} className="sm:mr-2" /> <span className="hidden sm:inline">Nuevo Registro</span>
                </button>
             )}
+            {viewMode === 'CHAT' && (
+              <button 
+                onClick={() => setViewMode('LIST')}
+                className="flex items-center text-slate-500 hover:text-blue-600 px-3 py-2 rounded-xl text-sm font-bold transition-all"
+              >
+                <X size={18} className="mr-2" /> <span className="hidden sm:inline">Cerrar Chat</span>
+              </button>
+            )}
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
-           {viewMode === 'CHAT' ? <ChatView currentUser={currentUser} /> : (
+        <div className={`flex-1 overflow-hidden ${viewMode === 'CHAT' ? '' : 'overflow-y-auto p-4 sm:p-8 custom-scrollbar'}`}>
+           {viewMode === 'CHAT' ? (
+             <ChatView currentUser={currentUser} onClose={() => setViewMode('LIST')} />
+           ) : (
              <>
-               <KPIDashboard tasks={filteredTasks} />
+               <KPIDashboard 
+                  tasks={filteredTasks} 
+                  events={filteredEvents} 
+                  eventCategories={eventCategories}
+               />
                
                <div className="mb-8 bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-4">
@@ -407,26 +1065,82 @@ function App() {
                </div>
                
                {viewMode === 'LIST' ? (
-                 <ProcessList 
-                   tasks={filteredTasks} 
-                   onStatusChange={handleStatusChange} 
-                   onTaskUpdate={handleTaskUpdate} 
-                   onEdit={handleEditClick} 
-                   onView={handleViewClick} 
-                   currentUser={currentUser} 
-                   showDepartment={activeTab === 'General'}
+                 <>
+                   {isLoadingTasks && (
+                     <div className="py-8 flex justify-center items-center text-slate-400">
+                        <div className="animate-spin mr-2"><Database size={20} /></div> Cargando datos...
+                     </div>
+                   )}
+                   <ProcessList 
+                     tasks={filteredTasks}
+                     events={filteredEvents}
+                     eventCategories={eventCategories} 
+                     onStatusChange={handleStatusChange} 
+                     onTaskUpdate={handleTaskUpdate} 
+                     onEdit={handleEditClick} 
+                     onView={handleViewClick}
+                     onDeleteEvent={handleDeleteEvent}
+                     currentUser={currentUser} 
+                     showDepartment={activeTab === 'General'}
+                   />
+                 </>
+               ) : (
+                 <CalendarView 
+                    tasks={filteredTasks} 
+                    events={filteredEvents}
+                    eventCategories={eventCategories}
+                    onView={handleViewClick} 
+                    eventsEnabled={isEventsEnabled}
+                    onAddEvent={handleAddEvent}
+                    departmentName={activeTab}
                  />
-               ) : <CalendarView tasks={filteredTasks} onView={handleViewClick} />}
+               )}
              </>
            )}
         </div>
       </main>
 
-      <AddTaskModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveTask} currentDepartment={activeTab} existingTasks={tasks} availableDepartments={filteredDepartments} users={users} />
+      <AddTaskModal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        onSave={handleSaveTask} 
+        onSaveEvent={handleSaveEvent}
+        currentDepartment={activeTab} 
+        existingTasks={tasks} 
+        availableDepartments={filteredDepartments} 
+        users={users} 
+        eventCategories={eventCategories}
+      />
       <EditTaskModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} onSave={handleUpdateTaskFromModal} task={taskToEdit} users={users} />
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} settings={appConfig} onSaveSettings={setAppConfig} departments={departments} onUpdateDepartments={setDepartments} departmentCounts={{}} currentUser={currentUser} />
-      <TaskDetailModal isOpen={!!taskToView} onClose={() => setTaskToView(null)} task={taskToView} onAddResource={() => {}} onDeleteResource={() => {}} onReorderResources={() => {}} availableCategories={appConfig.resourceCategories.map(c => c.name)} />
-      <UserManagementModal isOpen={isUserMgmtOpen} onClose={() => setIsUserMgmtOpen(false)} users={users} onSaveUser={u => setUsers([...users, u])} onDeleteUser={id => setUsers(users.filter(u => u.id !== id))} departments={departments} />
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        settings={appConfig} 
+        onSaveSettings={setAppConfig} 
+        departments={departments} 
+        onUpdateDepartments={setDepartments} 
+        departmentCounts={departmentCounts}
+        categoryCounts={categoryCounts}
+        onRenameDepartment={handleRenameDepartment}
+        onRenameCategory={handleRenameCategory}
+        currentUser={currentUser}
+        users={users}
+        onSaveUser={handleSaveUser}
+        onDeleteUser={handleDeleteUser}
+        eventCategories={eventCategories}
+        onSaveEventCategory={handleSaveEventCategory}
+        onDeleteEventCategory={handleDeleteEventCategory}
+      />
+      <TaskDetailModal 
+        isOpen={!!taskToView} 
+        onClose={() => setTaskToView(null)} 
+        task={taskToView} 
+        onAddResource={handleAddResource} 
+        onEditResource={handleEditResource}
+        onDeleteResource={handleDeleteResource}
+        onReorderResources={handleReorderResources}
+        availableCategories={appConfig.resourceCategories.map(c => c.name)} 
+      />
     </div>
   );
 }

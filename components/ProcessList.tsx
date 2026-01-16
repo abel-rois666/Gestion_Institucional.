@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { Task, TaskStatus, Profile, UserRole, DepartmentEnum } from '../types';
+import { Task, TaskStatus, Profile, UserRole, DepartmentEnum, CalendarEvent, EventCategory } from '../types';
 import { 
   Calendar, 
   User, 
@@ -21,20 +21,26 @@ import {
   CheckCircle2,
   RefreshCcw,
   Clock,
-  Briefcase
+  Briefcase,
+  Trash2,
+  ExternalLink,
+  Globe
 } from 'lucide-react';
 
 interface ProcessListProps {
   tasks: Task[];
+  events?: CalendarEvent[];
+  eventCategories: EventCategory[];
   onStatusChange: (id: string, status: TaskStatus) => void;
   onTaskUpdate: (id: string, field: keyof Task, value: any) => void;
   onEdit: (task: Task) => void;
   onView: (task: Task) => void; 
+  onDeleteEvent?: (id: string) => void;
   currentUser: Profile;
   showDepartment?: boolean;
 }
 
-type SortKey = 'title' | 'isSpecificTask' | 'department' | 'endDate' | 'assignee_name' | 'status';
+type SortKey = 'title' | 'isSpecificTask' | 'department' | 'endDate' | 'assignee_name' | 'status' | 'start_date';
 
 interface ColumnConfig {
   id: string;
@@ -170,7 +176,8 @@ const TaskCard: React.FC<{
   );
 };
 
-export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange, onTaskUpdate, onEdit, onView, currentUser, showDepartment }) => {
+export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], eventCategories, onStatusChange, onTaskUpdate, onEdit, onView, onDeleteEvent, currentUser, showDepartment }) => {
+  const [listMode, setListMode] = useState<'TASKS' | 'EVENTS'>('TASKS');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey, direction: 'asc' | 'desc' } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -202,6 +209,32 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
     setSortConfig({ key, direction });
   };
 
+  const generateGCalLink = (event: CalendarEvent) => {
+    const formatDate = (dateStr: string) => {
+        return new Date(dateStr).toISOString().replace(/-|:|\.\d\d\d/g, "");
+    };
+    
+    const start = formatDate(event.start_date);
+    // Default 1 hour if no end date
+    const end = event.end_date ? formatDate(event.end_date) : new Date(new Date(event.start_date).getTime() + 3600000).toISOString().replace(/-|:|\.\d\d\d/g, "");
+    
+    const details = encodeURIComponent(event.description || '');
+    const title = encodeURIComponent(event.title);
+    
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}`;
+  };
+
+  const getCategoryStyles = (catId: string) => {
+    const cat = eventCategories.find(c => c.id === catId);
+    if (!cat) return 'bg-gray-50 text-gray-700 ring-gray-700/10';
+    return `bg-${cat.color}-50 text-${cat.color}-700 ring-${cat.color}-700/10 ring-1 ring-inset`;
+  };
+
+  const getCategoryName = (catId: string) => {
+    const cat = eventCategories.find(c => c.id === catId);
+    return cat ? cat.name : 'Evento';
+  }
+
   const processedTasks = useMemo(() => {
     let result = [...tasks];
     if (searchTerm) {
@@ -215,7 +248,7 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
     }
     if (filterDept !== 'Todos') result = result.filter(t => t.department === filterDept);
 
-    if (sortConfig) {
+    if (sortConfig && listMode === 'TASKS') {
       result.sort((a, b) => {
         let valA: any = a[sortConfig.key as keyof Task] || '';
         let valB: any = b[sortConfig.key as keyof Task] || '';
@@ -225,7 +258,18 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
       });
     }
     return result;
-  }, [tasks, searchTerm, sortConfig, filterStatus, filterType, filterDept]);
+  }, [tasks, searchTerm, sortConfig, filterStatus, filterType, filterDept, listMode]);
+
+  const processedEvents = useMemo(() => {
+      let result = [...events];
+      if (searchTerm) {
+          const lowerTerm = searchTerm.toLowerCase();
+          result = result.filter(e => e.title.toLowerCase().includes(lowerTerm));
+      }
+      // Sort events by date
+      result.sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+      return result;
+  }, [events, searchTerm]);
 
   const HeaderButton: React.FC<{ label: string, sKey: SortKey }> = ({ label, sKey }) => (
     <button onClick={() => handleSort(sKey)} className="flex items-center gap-1.5 hover:text-blue-600 transition-colors group">
@@ -234,38 +278,67 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
     </button>
   );
 
+  const EmptyState = () => (
+    <div className="py-24 flex flex-col items-center justify-center text-center">
+      <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
+        <Briefcase size={32} />
+      </div>
+      <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No se encontraron registros activos</p>
+      <button onClick={() => setSearchTerm('')} className="mt-2 text-blue-600 text-xs font-bold hover:underline">Limpiar búsqueda</button>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {/* Barra de Búsqueda y Herramientas */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        
+        {/* VIEW TOGGLE */}
+        <div className="flex bg-slate-100 p-1 rounded-xl shrink-0 self-start md:self-center">
+            <button 
+                onClick={() => setListMode('TASKS')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${listMode === 'TASKS' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+                <List size={14} /> Actividades
+            </button>
+            <button 
+                onClick={() => setListMode('EVENTS')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${listMode === 'EVENTS' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+                <Calendar size={14} /> Eventos
+            </button>
+        </div>
+
         <div className="relative flex-1">
           <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
           <input 
-            type="text" placeholder="Filtrar por nombre o área..."
+            type="text" placeholder={listMode === 'TASKS' ? "Filtrar por nombre o área..." : "Buscar evento..."}
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
             value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
         
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => { setShowFilters(!showFilters); setShowColPicker(false); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
-          >
-            <Filter size={16} /> <span>Filtros</span>
-          </button>
+        {listMode === 'TASKS' && (
+            <div className="flex items-center gap-2">
+            <button 
+                onClick={() => { setShowFilters(!showFilters); setShowColPicker(false); }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
+            >
+                <Filter size={16} /> <span className="hidden sm:inline">Filtros</span>
+            </button>
 
-          <button 
-            onClick={() => { setShowColPicker(!showColPicker); setShowFilters(false); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showColPicker ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
-          >
-            <Settings2 size={16} /> <span>Columnas</span>
-          </button>
-        </div>
+            <button 
+                onClick={() => { setShowColPicker(!showColPicker); setShowFilters(false); }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition-all ${showColPicker ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm'}`}
+            >
+                <Settings2 size={16} /> <span className="hidden sm:inline">Columnas</span>
+            </button>
+            </div>
+        )}
       </div>
 
-      {/* Popover de Selección de Columnas */}
-      {showColPicker && (
+      {/* Popover de Selección de Columnas (SOLO TASKS) */}
+      {showColPicker && listMode === 'TASKS' && (
         <div className="bg-white p-5 rounded-2xl shadow-xl border border-slate-200 animate-in slide-in-from-top-2 duration-200">
           <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Personalizar Columnas de la Tabla</h4>
@@ -291,8 +364,8 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
         </div>
       )}
 
-      {/* Panel de Filtros Expandible */}
-      {showFilters && (
+      {/* Panel de Filtros Expandible (SOLO TASKS) */}
+      {showFilters && listMode === 'TASKS' && (
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-200 animate-in slide-in-from-top-2 duration-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Área Institucional</label>
@@ -340,98 +413,199 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, onStatusChange,
         
         {/* VISTA DESKTOP (TABLA): Scroll horizontal asegurado */}
         <div className="hidden lg:block overflow-x-auto">
-          <table className="min-w-[1100px] w-full divide-y divide-slate-100">
-            <thead className="bg-slate-50/50">
-              <tr>
-                {visibleColumns.has('title') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Nombre / Cumplimiento" sKey="title" /></th>}
-                {visibleColumns.has('type') && <th className="px-6 py-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Tipo" sKey="isSpecificTask" /></th>}
-                {visibleColumns.has('department') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Área" sKey="department" /></th>}
-                {visibleColumns.has('schedule') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Cronograma" sKey="endDate" /></th>}
-                {visibleColumns.has('assignee') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Responsable" sKey="assignee_name" /></th>}
-                {visibleColumns.has('status') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Estado" sKey="status" /></th>}
-                {visibleColumns.has('actions') && <th className="px-6 py-4 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acciones</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {processedTasks.map(task => {
-                const completedSub = task.subtasks?.filter(s => s.status === TaskStatus.COMPLETED).length || 0;
-                const totalSub = task.subtasks?.length || 0;
-                const percent = totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0;
+          {listMode === 'TASKS' ? (
+            <table className="min-w-[1100px] w-full divide-y divide-slate-100">
+                <thead className="bg-slate-50/50">
+                <tr>
+                    {visibleColumns.has('title') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Nombre / Cumplimiento" sKey="title" /></th>}
+                    {visibleColumns.has('type') && <th className="px-6 py-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Tipo" sKey="isSpecificTask" /></th>}
+                    {visibleColumns.has('department') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Área" sKey="department" /></th>}
+                    {visibleColumns.has('schedule') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Cronograma" sKey="endDate" /></th>}
+                    {visibleColumns.has('assignee') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Responsable" sKey="assignee_name" /></th>}
+                    {visibleColumns.has('status') && <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest"><HeaderButton label="Estado" sKey="status" /></th>}
+                    {visibleColumns.has('actions') && <th className="px-6 py-4 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acciones</th>}
+                </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                {processedTasks.length > 0 ? processedTasks.map(task => {
+                    const completedSub = task.subtasks?.filter(s => s.status === TaskStatus.COMPLETED).length || 0;
+                    const totalSub = task.subtasks?.length || 0;
+                    const percent = totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0;
 
-                return (
-                  <tr key={task.id} className="hover:bg-slate-50/80 transition-colors group">
-                    {visibleColumns.has('title') && (
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col text-left">
-                          <span className="text-sm font-bold text-slate-900 group-hover:text-blue-600 cursor-pointer transition-colors" onClick={() => onView(task)}>{task.title}</span>
-                          {totalSub > 0 && (
-                            <div className="flex items-center gap-3 mt-1.5">
-                              <div className="w-16 h-1 bg-slate-100 rounded-full"><div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div></div>
-                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tight">{completedSub}/{totalSub} Completados</span>
+                    return (
+                    <tr key={task.id} className="hover:bg-slate-50/80 transition-colors group">
+                        {visibleColumns.has('title') && (
+                        <td className="px-6 py-4">
+                            <div className="flex flex-col text-left">
+                            <span className="text-sm font-bold text-slate-900 group-hover:text-blue-600 cursor-pointer transition-colors" onClick={() => onView(task)}>{task.title}</span>
+                            {totalSub > 0 && (
+                                <div className="flex items-center gap-3 mt-1.5">
+                                <div className="w-16 h-1 bg-slate-100 rounded-full"><div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div></div>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tight">{completedSub}/{totalSub} Completados</span>
+                                </div>
+                            )}
                             </div>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                    {visibleColumns.has('type') && (
-                      <td className="px-6 py-4 text-center">
-                        <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider ${task.isSpecificTask ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-700/10' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-700/10'}`}>
-                          {task.isSpecificTask ? 'Tarea' : 'Proceso'}
-                        </span>
-                      </td>
-                    )}
-                    {visibleColumns.has('department') && <td className="px-6 py-4 whitespace-nowrap"><span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">{task.department}</span></td>}
-                    {visibleColumns.has('schedule') && (
-                      <td className="px-6 py-4 whitespace-nowrap">
-                         <div className="flex flex-col text-[10px] font-bold space-y-0.5">
-                           <span className="text-slate-400 flex items-center gap-1"><Clock size={10} /> {task.startDate || '--'}</span>
-                           <span className="text-slate-700 flex items-center gap-1"><Check size={10} /> {task.endDate || '--'}</span>
-                         </div>
-                      </td>
-                    )}
-                    {visibleColumns.has('assignee') && <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center gap-1.5"><User size={12} className="text-slate-300"/><span className="text-[11px] font-bold text-slate-600">{task.assignee_name || 'Sin asignar'}</span></div></td>}
-                    {visibleColumns.has('status') && <td className="px-6 py-4"><StatusSelect status={task.status} onChange={(s) => onStatusChange(task.id, s)} /></td>}
-                    {visibleColumns.has('actions') && (
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => onView(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Ver detalle"><Eye size={18} /></button>
-                          {currentUser.role !== UserRole.AUXILIAR && <button onClick={() => onEdit(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Editar"><Edit2 size={16} /></button>}
-                        </div>
-                      </td>
-                    )}
+                        </td>
+                        )}
+                        {visibleColumns.has('type') && (
+                        <td className="px-6 py-4 text-center">
+                            <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider ${task.isSpecificTask ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-700/10' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-700/10'}`}>
+                            {task.isSpecificTask ? 'Tarea' : 'Proceso'}
+                            </span>
+                        </td>
+                        )}
+                        {visibleColumns.has('department') && <td className="px-6 py-4 whitespace-nowrap"><span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">{task.department}</span></td>}
+                        {visibleColumns.has('schedule') && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex flex-col text-[10px] font-bold space-y-0.5">
+                            <span className="text-slate-400 flex items-center gap-1"><Clock size={10} /> {task.startDate || '--'}</span>
+                            <span className="text-slate-700 flex items-center gap-1"><Check size={10} /> {task.endDate || '--'}</span>
+                            </div>
+                        </td>
+                        )}
+                        {visibleColumns.has('assignee') && <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center gap-1.5"><User size={12} className="text-slate-300"/><span className="text-[11px] font-bold text-slate-600">{task.assignee_name || 'Sin asignar'}</span></div></td>}
+                        {visibleColumns.has('status') && <td className="px-6 py-4"><StatusSelect status={task.status} onChange={(s) => onStatusChange(task.id, s)} /></td>}
+                        {visibleColumns.has('actions') && (
+                        <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => onView(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Ver detalle"><Eye size={18} /></button>
+                            {currentUser.role !== UserRole.AUXILIAR && <button onClick={() => onEdit(task)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="Editar"><Edit2 size={16} /></button>}
+                            </div>
+                        </td>
+                        )}
+                    </tr>
+                    );
+                }) : (
+                  <tr>
+                    <td colSpan={visibleColumns.size + 1} className="py-24 text-center">
+                      <EmptyState />
+                    </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                )}
+                </tbody>
+            </table>
+          ) : (
+            // EVENTS TABLE
+            <table className="min-w-[1100px] w-full divide-y divide-slate-100">
+                <thead className="bg-slate-50/50">
+                    <tr>
+                        <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Evento</th>
+                        <th className="px-6 py-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tipo</th>
+                        <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fecha y Hora</th>
+                        <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Departamento</th>
+                        <th className="px-6 py-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Visibilidad</th>
+                        <th className="px-6 py-4 text-right text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                    {processedEvents.length > 0 ? processedEvents.map(event => (
+                        <tr key={event.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="px-6 py-4">
+                                <div className="font-bold text-sm text-slate-900">{event.title}</div>
+                                <div className="text-[10px] text-slate-500 truncate max-w-xs">{event.description}</div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                                <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getCategoryStyles(event.category_id)}`}>
+                                    {getCategoryName(event.category_id)}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4">
+                                <div className="flex flex-col text-[11px] font-bold text-slate-700">
+                                    <span>{new Date(event.start_date).toLocaleDateString()}</span>
+                                    <span className="text-slate-400 text-[10px]">{new Date(event.start_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                            </td>
+                            <td className="px-6 py-4">
+                                <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">{event.department}</span>
+                            </td>
+                            <td className="px-6 py-4">
+                                {event.is_global ? (
+                                    <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full flex items-center gap-1 w-fit">
+                                        <Globe size={10} /> Global
+                                    </span>
+                                ) : (
+                                    <span className="text-[10px] font-bold text-slate-400">Interno</span>
+                                )}
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                    <a 
+                                      href={generateGCalLink(event)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-xl transition-all"
+                                      title="Agregar a Google Calendar"
+                                    >
+                                        <ExternalLink size={16} />
+                                    </a>
+                                    {onDeleteEvent && (currentUser.role === UserRole.ADMIN || event.created_by === currentUser.id) && (
+                                        <button 
+                                            onClick={() => onDeleteEvent(event.id)} 
+                                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                                            title="Eliminar evento"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    )}
+                                </div>
+                            </td>
+                        </tr>
+                    )) : (
+                        <tr>
+                            <td colSpan={6} className="py-24 text-center">
+                                <EmptyState />
+                            </td>
+                        </tr>
+                    )}
+                </tbody>
+            </table>
+          )}
         </div>
 
         {/* VISTA MÓVIL/TABLET (TARJETAS) */}
         <div className="lg:hidden p-4 bg-slate-50/40">
-          {/* grid-cols-1 para móvil, md:grid-cols-2 para tablet */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {processedTasks.map(task => (
-              <TaskCard 
-                key={task.id} 
-                task={task} 
-                onView={onView} 
-                onEdit={onEdit} 
-                onStatusChange={onStatusChange} 
-                currentUser={currentUser} 
-              />
-            ))}
-          </div>
+          {listMode === 'TASKS' ? (
+            processedTasks.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {processedTasks.map(task => (
+                    <TaskCard 
+                        key={task.id} 
+                        task={task} 
+                        onView={onView} 
+                        onEdit={onEdit} 
+                        onStatusChange={onStatusChange} 
+                        currentUser={currentUser} 
+                    />
+                    ))}
+                </div>
+            ) : <EmptyState />
+          ) : (
+             processedEvents.length > 0 ? (
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     {processedEvents.map(event => (
+                         <div key={event.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+                             <div className="flex justify-between items-start mb-2">
+                                 <h4 className="font-bold text-slate-800">{event.title}</h4>
+                                 <span className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase ${getCategoryStyles(event.category_id)}`}>{getCategoryName(event.category_id)}</span>
+                             </div>
+                             <p className="text-xs text-slate-500 mb-3">{event.description}</p>
+                             <div className="flex justify-between items-center text-[10px] font-bold text-slate-600 border-t border-slate-100 pt-2">
+                                 <span>{new Date(event.start_date).toLocaleDateString()}</span>
+                                 <a 
+                                    href={generateGCalLink(event)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center gap-1 text-blue-600"
+                                 >
+                                     <Calendar size={12} /> Google Cal
+                                 </a>
+                             </div>
+                         </div>
+                     ))}
+                 </div>
+             ) : <EmptyState />
+          )}
         </div>
-
-        {processedTasks.length === 0 && (
-          <div className="py-24 flex flex-col items-center justify-center text-center">
-            <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
-              <Briefcase size={32} />
-            </div>
-            <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No se encontraron registros activos</p>
-            <button onClick={() => setSearchTerm('')} className="mt-2 text-blue-600 text-xs font-bold hover:underline">Limpiar búsqueda</button>
-          </div>
-        )}
       </div>
     </div>
   );
