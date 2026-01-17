@@ -95,7 +95,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ currentUser, onClose }) => {
       
       if (data) {
         setChannels(data);
-        if (!activeChannel && data.length > 0) {
+        // Default to public channel ONLY on large screens to avoid confusing mobile UX
+        if (!activeChannel && data.length > 0 && window.innerWidth >= 1024) {
            const firstPublic = data.find((c: Channel) => c.type === 'public');
            if (firstPublic) setActiveChannel(firstPublic);
         }
@@ -475,7 +476,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ currentUser, onClose }) => {
     <div className="flex h-full bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-300 relative">
       
       {/* Sidebar de Canales */}
-      <div className="w-64 border-r border-gray-100 bg-slate-50 flex flex-col shrink-0">
+      <div className={`${activeChannel ? 'hidden lg:flex' : 'flex'} w-full lg:w-64 border-r border-gray-100 bg-slate-50 flex-col shrink-0`}>
         <div className="p-4 border-b border-gray-100 bg-white">
           <div className="relative">
             <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
@@ -581,15 +582,23 @@ export const ChatView: React.FC<ChatViewProps> = ({ currentUser, onClose }) => {
       </div>
 
       {/* Área de Chat */}
-      <div className="flex-1 flex flex-col bg-white min-w-0">
+      <div className={`${!activeChannel ? 'hidden lg:flex' : 'flex'} flex-1 flex-col bg-white min-w-0`}>
         
         {/* Header */}
-        <div className="h-16 px-6 border-b border-gray-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center min-w-0">
+        <div className="h-16 px-4 sm:px-6 border-b border-gray-100 flex items-center justify-between shrink-0">
+          <div className="flex items-center min-w-0 gap-3">
+            {/* Mobile Back Button */}
+            <button 
+              onClick={() => setActiveChannel(null)} 
+              className="lg:hidden p-2 text-slate-500 hover:bg-slate-50 rounded-full"
+            >
+              <ArrowLeft size={20} />
+            </button>
+
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${activeChannel?.type === 'dm' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>
               {activeChannel?.type === 'dm' ? <Lock size={20} /> : <Hash size={20} />}
             </div>
-            <div className="ml-3 truncate">
+            <div className="truncate">
               <h2 className="text-sm font-bold text-slate-800">
                  {activeChannel ? (activeChannel.type === 'dm' ? getDMName(activeChannel) : activeChannel.name) : 'Selecciona un canal'}
               </h2>
@@ -614,7 +623,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ currentUser, onClose }) => {
         </div>
 
         {/* Lista de Mensajes */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50/30">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar bg-slate-50/30">
           {!activeChannel ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-3">
               <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">

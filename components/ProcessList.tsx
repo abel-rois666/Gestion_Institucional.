@@ -71,7 +71,7 @@ const StatusSelect: React.FC<{ status: TaskStatus; onChange: (s: TaskStatus) => 
       <select
         value={status}
         onChange={(e) => onChange(e.target.value as TaskStatus)}
-        className={`appearance-none cursor-pointer font-bold border rounded-xl focus:outline-none transition-all w-full ${bgStyles[status]} ${compact ? 'text-[10px] px-2 py-1' : 'text-[11px] px-3 py-1.5 pr-8'}`}
+        className={`appearance-none cursor-pointer font-bold border rounded-xl focus:outline-none transition-all w-full ${bgStyles[status]} ${compact ? 'text-[10px] sm:text-xs px-2 py-1.5 sm:py-1' : 'text-[11px] px-3 py-1.5 pr-8'}`}
       >
         {Object.values(TaskStatus).map((s) => (
           <option key={s} value={s}>{s}</option>
@@ -98,25 +98,25 @@ const TaskCard: React.FC<{
   const canEdit = currentUser.role !== UserRole.AUXILIAR;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg transition-all duration-300 animate-in fade-in zoom-in-95 group">
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg transition-all duration-300 animate-in fade-in zoom-in-95 group flex flex-col h-full">
       {/* Header de Tarjeta */}
-      <div className="flex justify-between items-start mb-4 gap-4">
-        <div className="space-y-2 flex-1">
+      <div className="flex justify-between items-start mb-4 gap-3">
+        <div className="space-y-2 flex-1 min-w-0">
           <div className="flex flex-wrap gap-1.5">
-             <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider ring-1 ring-inset ${
+             <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset ${
                 task.isSpecificTask ? 'bg-purple-50 text-purple-700 ring-purple-700/10' : 'bg-blue-50 text-blue-700 ring-blue-700/10'
              }`}>
                 {task.isSpecificTask ? 'Tarea' : 'Proceso'}
              </span>
-             <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-bold uppercase tracking-wider">
+             <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider truncate max-w-full">
                 {task.department}
              </span>
           </div>
-          <h3 className="font-bold text-slate-900 text-base leading-snug cursor-pointer group-hover:text-blue-600 transition-colors" onClick={() => onView(task)}>
+          <h3 className="font-bold text-slate-900 text-base leading-snug cursor-pointer group-hover:text-blue-600 transition-colors break-words" onClick={() => onView(task)}>
             {task.title}
           </h3>
         </div>
-        <div className="shrink-0 min-w-[110px]">
+        <div className="shrink-0 w-28 sm:w-32">
           <StatusSelect status={task.status} onChange={(s) => onStatusChange(task.id, s)} compact />
         </div>
       </div>
@@ -124,22 +124,22 @@ const TaskCard: React.FC<{
       {/* Grid de Información Detallada */}
       <div className="grid grid-cols-2 gap-y-3 gap-x-4 mb-5 p-3 bg-slate-50 rounded-xl border border-slate-100">
         <div className="space-y-1">
-          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Calendar size={12} /> Inicio</span>
-          <p className="text-[11px] font-bold text-slate-700">{task.startDate || 'No definida'}</p>
+          <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Calendar size={12} /> Inicio</span>
+          <p className="text-xs font-bold text-slate-700">{task.startDate || 'No definida'}</p>
         </div>
         <div className="space-y-1">
-          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Check size={12} /> Entrega</span>
-          <p className="text-[11px] font-bold text-slate-700">{task.endDate || 'No definida'}</p>
+          <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><Check size={12} /> Entrega</span>
+          <p className="text-xs font-bold text-slate-700">{task.endDate || 'No definida'}</p>
         </div>
-        <div className="col-span-2 pt-1 border-t border-slate-200/60">
-          <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><User size={12} /> Responsable</span>
-          <p className="text-[11px] font-bold text-slate-700">{task.assignee_name || 'Sin asignar'}</p>
+        <div className="col-span-2 pt-2 border-t border-slate-200/60">
+          <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1.5"><User size={12} /> Responsable</span>
+          <p className="text-xs font-bold text-slate-700 truncate">{task.assignee_name || 'Sin asignar'}</p>
         </div>
       </div>
 
       {/* Barra de Progreso */}
       {subtasks.length > 0 && (
-        <div className="mb-5">
+        <div className="mb-5 mt-auto">
           <div className="flex justify-between items-center mb-1.5">
             <span className="text-[10px] font-bold text-slate-500 uppercase">Cumplimiento del proceso</span>
             <span className="text-[10px] font-bold text-blue-600">{progress}%</span>
@@ -150,24 +150,25 @@ const TaskCard: React.FC<{
               style={{ width: `${progress}%` }} 
             />
           </div>
-          <p className="text-[9px] text-slate-400 mt-1 font-medium">{completedCount} de {subtasks.length} tareas terminadas</p>
+          <p className="text-[10px] text-slate-400 mt-1 font-medium">{completedCount} de {subtasks.length} tareas terminadas</p>
         </div>
       )}
 
       {/* Descripción (si no hay subtareas) */}
       {subtasks.length === 0 && (
-        <p className="text-xs text-slate-500 mb-5 line-clamp-2 italic leading-relaxed">
+        <p className="text-sm text-slate-600 mb-5 leading-relaxed mt-auto break-words">
+          {/* No line-clamp on mobile to avoid cutting text, clamp on desktop if needed */}
           {task.description || 'Sin notas o descripción técnica adicional.'}
         </p>
       )}
 
       {/* Acciones de Pie de Tarjeta */}
-      <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-        <button onClick={() => onView(task)} className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-blue-600 transition-all">
+      <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-auto">
+        <button onClick={() => onView(task)} className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-blue-600 transition-all p-2 -ml-2">
           <Eye size={16} /> Ver detalles
         </button>
         {canEdit && (
-          <button onClick={() => onEdit(task)} className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-blue-50 hover:text-blue-600 transition-all">
+          <button onClick={() => onEdit(task)} className="flex items-center gap-2 px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-blue-50 hover:text-blue-600 transition-all">
             <Edit2 size={14} /> Editar
           </button>
         )}
@@ -583,21 +584,24 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
              processedEvents.length > 0 ? (
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      {processedEvents.map(event => (
-                         <div key={event.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-                             <div className="flex justify-between items-start mb-2">
-                                 <h4 className="font-bold text-slate-800">{event.title}</h4>
-                                 <span className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase ${getCategoryStyles(event.category_id)}`}>{getCategoryName(event.category_id)}</span>
+                         <div key={event.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                             <div className="flex justify-between items-start mb-3 gap-2">
+                                 <h4 className="font-bold text-slate-800 text-sm leading-snug">{event.title}</h4>
+                                 <span className={`px-2 py-1 text-[9px] font-bold rounded uppercase shrink-0 ${getCategoryStyles(event.category_id)}`}>{getCategoryName(event.category_id)}</span>
                              </div>
-                             <p className="text-xs text-slate-500 mb-3">{event.description}</p>
-                             <div className="flex justify-between items-center text-[10px] font-bold text-slate-600 border-t border-slate-100 pt-2">
-                                 <span>{new Date(event.start_date).toLocaleDateString()}</span>
+                             <p className="text-sm text-slate-600 mb-4 leading-relaxed">{event.description}</p>
+                             <div className="flex justify-between items-center text-xs font-bold text-slate-500 border-t border-slate-100 pt-3">
+                                 <span className="flex items-center gap-1">
+                                    <Calendar size={14} />
+                                    {new Date(event.start_date).toLocaleDateString()} {new Date(event.start_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                 </span>
                                  <a 
                                     href={generateGCalLink(event)}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="flex items-center gap-1 text-blue-600"
+                                    className="flex items-center gap-1 text-blue-600 hover:text-blue-700 bg-blue-50 px-2 py-1 rounded-lg transition-colors"
                                  >
-                                     <Calendar size={12} /> Google Cal
+                                     <Calendar size={14} /> <span>Agendar</span>
                                  </a>
                              </div>
                          </div>

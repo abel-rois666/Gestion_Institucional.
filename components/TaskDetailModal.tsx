@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Task, Resource, Report } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -30,7 +29,11 @@ import {
   Edit2,
   AlertTriangle,
   Download,
-  Play
+  Play,
+  List,
+  Layers,
+  AlignLeft,
+  Info
 } from 'lucide-react';
 import { RichTextEditor } from './RichTextEditor';
 
@@ -57,7 +60,13 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'resources' | 'reports'>('resources');
   
+  // Accordion States
+  const [isResourceFormOpen, setIsResourceFormOpen] = useState(false);
+  const [isResourceListOpen, setIsResourceListOpen] = useState(false);
+  const [isReportListOpen, setIsReportListOpen] = useState(false);
+
   // Resource States
+  const [localResources, setLocalResources] = useState<Resource[]>([]);
   const [newResName, setNewResName] = useState('');
   const [newResUrl, setNewResUrl] = useState('');
   const [newResCategory, setNewResCategory] = useState('');
@@ -80,29 +89,40 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Cargar reportes cuando se abre la tarea
+  // Initialize and Fetch Data
   useEffect(() => {
-    if (isOpen && task && isSupabaseConfigured) {
-      const fetchReports = async () => {
+    if (isOpen && task) {
+      // 1. Initialize with props to show something immediately
+      setLocalResources(task.resources || []);
+      
+      if (isSupabaseConfigured) {
+        // 2. Fetch fresh Resources
+        supabase
+          .from('resources')
+          .select('*')
+          .eq('task_id', task.id)
+          .then(({ data }) => {
+             if (data) setLocalResources(data);
+          });
+
+        // 3. Fetch fresh Reports
         setIsLoadingReports(true);
-        const { data } = await supabase
+        supabase
           .from('reports')
           .select('*')
           .eq('task_id', task.id)
-          .order('created_at', { ascending: false });
-        
-        if (data) {
-          setReports(data as unknown as Report[]);
-        }
-        setIsLoadingReports(false);
-      };
-      fetchReports();
-    } else if (isOpen && task && !isSupabaseConfigured) {
-       setReports(task.reports || []);
+          .order('created_at', { ascending: false })
+          .then(({ data }) => {
+             if (data) setReports(data as unknown as Report[]);
+             setIsLoadingReports(false);
+          });
+      } else {
+         setReports(task.reports || []);
+      }
     }
-  }, [isOpen, task]);
+  }, [task?.id, isOpen]); // Depend only on ID to avoid overwriting with stale props on parent updates
 
-  // Resetear formulario al cerrar o cambiar tab
+  // Reset forms on close
   useEffect(() => {
      if(!isOpen) {
         setEditingResource(null);
@@ -110,6 +130,11 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
         setNewResUrl('');
         setNewResCategory('');
         setPendingDelete(null);
+        setActivePreview(null);
+        setActiveReport(null);
+        setIsResourceFormOpen(false); // Reset accordion
+        setIsResourceListOpen(false);
+        setIsReportListOpen(false);
      }
   }, [isOpen]);
 
@@ -132,23 +157,24 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     
     const type = getResourceType(newResUrl);
     
+    const resourceData: Resource = {
+        id: editingResource ? editingResource.id : crypto.randomUUID(),
+        name: newResName,
+        url: newResUrl,
+        type: type,
+        category: newResCategory || 'Otros'
+    };
+
     if (editingResource && onEditResource) {
-        onEditResource(task.id, {
-            ...editingResource,
-            name: newResName,
-            url: newResUrl,
-            type: type,
-            category: newResCategory || 'Otros'
-        });
+        onEditResource(task.id, resourceData);
+        setLocalResources(prev => prev.map(r => r.id === resourceData.id ? resourceData : r));
         setEditingResource(null);
     } else {
-        onAddResource(task.id, {
-            id: crypto.randomUUID(),
-            name: newResName,
-            url: newResUrl,
-            type,
-            category: newResCategory || 'Otros'
-        });
+        onAddResource(task.id, resourceData);
+        setLocalResources(prev => [...prev, resourceData]);
+        // Opcional: Cerrar formulario después de agregar y abrir lista
+        // setIsResourceFormOpen(false);
+        setIsResourceListOpen(true);
     }
     setNewResName(''); setNewResUrl(''); setNewResCategory('');
   };
@@ -160,6 +186,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       setNewResUrl(res.url);
       setNewResCategory(res.category || '');
       setActiveTab('resources');
+      setIsResourceFormOpen(true); // Abrir formulario automáticamente
   };
 
   const cancelEditingResource = () => {
@@ -176,14 +203,18 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     reader.onload = (event) => {
       const result = event.target?.result as string;
       if (result) {
-        onAddResource(task.id, {
+        const newResource: Resource = {
           id: crypto.randomUUID(),
           name: file.name,
           url: result,
           type: getResourceType(result, file.name),
           category: newResCategory || 'Evidencias'
-        });
+        };
+        
+        onAddResource(task.id, newResource);
+        setLocalResources(prev => [...prev, newResource]);
         setNewResCategory('');
+        setIsResourceListOpen(true); // Asegurar que la lista esté visible
       }
     };
     reader.readAsDataURL(file);
@@ -200,6 +231,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
     if (pendingDelete.type === 'resource') {
         onDeleteResource(task.id, pendingDelete.id);
+        setLocalResources(prev => prev.filter(r => r.id !== pendingDelete.id));
         if (activePreview?.id === pendingDelete.id) setActivePreview(null);
     } else {
         // Eliminar reporte
@@ -456,7 +488,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
         
         {/* DELETE CONFIRMATION OVERLAY */}
         {pendingDelete && (
@@ -495,30 +527,30 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           </div>
         )}
 
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 relative">
+        <div className="bg-white rounded-none sm:rounded-2xl shadow-2xl w-full max-w-6xl h-full sm:h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 relative">
           
           {/* Header */}
           <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0">
-            <div className="flex items-center space-x-4">
-               <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${task.isSpecificTask ? 'bg-purple-600' : 'bg-blue-600'}`}>
+            <div className="flex items-center space-x-4 min-w-0">
+               <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${task.isSpecificTask ? 'bg-purple-600' : 'bg-blue-600'}`}>
                   {task.isSpecificTask ? <FileText size={20} /> : <Building2 size={20} />}
                </div>
-               <div>
-                  <h2 className="text-lg font-bold leading-tight">{task.title}</h2>
-                  <p className="text-xs text-slate-400 font-medium">{task.department} • {task.status}</p>
+               <div className="min-w-0">
+                  <h2 className="text-lg font-bold leading-tight truncate">{task.title}</h2>
+                  <p className="text-xs text-slate-400 font-medium truncate">{task.department} • {task.status}</p>
                </div>
             </div>
-            <button onClick={onClose} className="hover:bg-white/10 p-2 rounded-full transition-colors">
+            <button onClick={onClose} className="hover:bg-white/10 p-2 rounded-full transition-colors shrink-0">
               <X size={24} />
             </button>
           </div>
 
-          <div className="flex flex-1 overflow-hidden">
-            {/* Left Sidebar: Navigation & Lists */}
-            <div className="w-80 border-r border-gray-100 bg-slate-50 flex flex-col shrink-0">
+          <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+            {/* Left Sidebar: Navigation & Lists (Top on Mobile, Left on Desktop) */}
+            <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-gray-100 bg-slate-50 flex flex-col shrink-0 max-h-[40vh] lg:max-h-full">
               
               {/* Tab Toggles */}
-              <div className="p-4 flex gap-2">
+              <div className="p-4 flex gap-2 shrink-0 bg-white lg:bg-transparent border-b border-gray-100 lg:border-none">
                 <button 
                   onClick={() => {
                     setActiveTab('resources');
@@ -541,120 +573,169 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               </div>
 
               {/* Dynamic Content Sidebar */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
                 
                 {activeTab === 'resources' ? (
-                  <div className="space-y-4">
-                    {/* Add/Edit Resource Card */}
-                    <div className={`p-4 rounded-xl shadow-sm border space-y-3 transition-colors ${editingResource ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200'}`}>
-                      <div className="flex justify-between items-center">
-                          <h4 className={`text-[10px] font-bold uppercase tracking-widest ${editingResource ? 'text-blue-600' : 'text-slate-400'}`}>
-                              {editingResource ? 'Editando Recurso' : 'Añadir Recurso'}
-                          </h4>
-                          {editingResource && (
-                              <button onClick={cancelEditingResource} className="text-[10px] font-bold text-slate-400 hover:text-red-500">
-                                  Cancelar
-                              </button>
-                          )}
-                      </div>
+                  <>
+                    {/* ACCORDION 1: AÑADIR RECURSO */}
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                      <button 
+                        onClick={() => setIsResourceFormOpen(!isResourceFormOpen)}
+                        className={`w-full flex items-center justify-between p-3 text-xs font-bold transition-all ${isResourceFormOpen ? 'bg-slate-50 text-blue-600' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Plus size={14} className={isResourceFormOpen ? 'text-blue-600' : 'text-slate-400'} />
+                          {editingResource ? 'Editando Recurso' : 'Añadir Nuevo Recurso'}
+                        </span>
+                        {isResourceFormOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
                       
-                      <form onSubmit={handleResourceSubmit} className="space-y-2">
-                        <input
-                          type="text"
-                          placeholder="Nombre..."
-                          value={newResName}
-                          onChange={e => setNewResName(e.target.value)}
-                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent"
-                        />
-                        
-                        <select
-                          value={newResCategory}
-                          onChange={e => setNewResCategory(e.target.value)}
-                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent text-slate-600"
-                        >
-                          <option value="">Categoría (Opcional)...</option>
-                          {availableCategories.map(cat => (
-                            <option key={cat} value={cat}>{cat}</option>
-                          ))}
-                        </select>
-
-                        <input
-                          type="url"
-                          placeholder="URL (Drive, YouTube, etc)..."
-                          value={newResUrl}
-                          onChange={e => setNewResUrl(e.target.value)}
-                          className="w-full text-xs border-b border-gray-100 outline-none py-1 focus:border-blue-500 bg-transparent"
-                        />
-                        <button 
-                            type="submit" 
-                            className={`w-full py-1.5 rounded-lg text-[10px] font-bold transition-colors text-white ${editingResource ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-900 hover:bg-slate-800'}`}
-                        >
-                          {editingResource ? 'Guardar Cambios' : 'Vincular Recurso'}
-                        </button>
-                      </form>
-                      
-                      {!editingResource && (
-                        <>
-                            <button 
-                                onClick={() => fileInputRef.current?.click()}
-                                className="w-full bg-slate-100 text-slate-600 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors border border-dashed border-slate-300"
+                      {isResourceFormOpen && (
+                        <div className="p-4 bg-slate-50 border-t border-slate-100 animate-in slide-in-from-top-2">
+                          <div className="flex justify-between items-center mb-3">
+                              <h4 className={`text-[10px] font-bold uppercase tracking-widest ${editingResource ? 'text-blue-600' : 'text-slate-400'}`}>
+                                  {editingResource ? 'Modo Edición' : 'Formulario'}
+                              </h4>
+                              {editingResource && (
+                                  <button onClick={cancelEditingResource} className="text-[10px] font-bold text-slate-400 hover:text-red-500">
+                                      Cancelar
+                                  </button>
+                              )}
+                          </div>
+                          
+                          <form onSubmit={handleResourceSubmit} className="space-y-2">
+                            <input
+                              type="text"
+                              placeholder="Nombre..."
+                              value={newResName}
+                              onChange={e => setNewResName(e.target.value)}
+                              className="w-full text-xs border-b border-gray-200 outline-none py-1 focus:border-blue-500 bg-transparent"
+                            />
+                            
+                            <select
+                              value={newResCategory}
+                              onChange={e => setNewResCategory(e.target.value)}
+                              className="w-full text-xs border-b border-gray-200 outline-none py-1 focus:border-blue-500 bg-transparent text-slate-600"
                             >
-                                <FileUp size={12} className="inline mr-1" /> Subir Archivo
+                              <option value="">Categoría (Opcional)...</option>
+                              {availableCategories.map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
+                              ))}
+                            </select>
+
+                            <input
+                              type="url"
+                              placeholder="URL (Drive, YouTube, etc)..."
+                              value={newResUrl}
+                              onChange={e => setNewResUrl(e.target.value)}
+                              className="w-full text-xs border-b border-gray-200 outline-none py-1 focus:border-blue-500 bg-transparent"
+                            />
+                            <button 
+                                type="submit" 
+                                className={`w-full py-2 rounded-lg text-[10px] font-bold transition-colors text-white mt-2 ${editingResource ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-900 hover:bg-slate-800'}`}
+                            >
+                              {editingResource ? 'Guardar Cambios' : 'Vincular Recurso'}
                             </button>
-                            <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
-                        </>
+                          </form>
+                          
+                          {!editingResource && (
+                            <>
+                                <div className="flex items-center gap-2 my-2">
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                                  <span className="text-[9px] text-slate-400 font-bold uppercase">O subir archivo</span>
+                                  <div className="h-px bg-slate-200 flex-1"></div>
+                                </div>
+                                <button 
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="w-full bg-white text-slate-600 py-2 rounded-lg text-[10px] font-bold hover:bg-slate-100 transition-colors border border-dashed border-slate-300"
+                                >
+                                    <FileUp size={12} className="inline mr-1" /> Seleccionar Archivo
+                                </button>
+                                <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+                            </>
+                          )}
+                        </div>
                       )}
                     </div>
 
-                    {/* Resources List */}
-                    <div className="space-y-2">
-                      {task.resources?.map((res, index) => (
-                        <div 
-                          key={res.id} 
-                          onClick={() => { 
-                            setActivePreview(res); 
-                            setActiveReport(null); 
-                            setIsEditingReport(false);
-                            if (editingResource && editingResource.id !== res.id) cancelEditingResource();
-                          }}
-                          className={`p-3 rounded-xl border cursor-pointer transition-all group ${
-                              activePreview?.id === res.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 
-                              editingResource?.id === res.id ? 'bg-yellow-50 border-yellow-200 ring-1 ring-yellow-200' : 
-                              'bg-white border-gray-100 hover:border-blue-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                             <ResourceIcon type={res.type} />
-                             <div className="truncate flex-1">
-                               <p className="text-[11px] font-bold text-slate-800 truncate">{res.name}</p>
-                               <p className="text-[9px] text-slate-400 uppercase font-semibold">{res.category || 'Otros'}</p>
-                             </div>
-                             
-                             {/* Actions */}
-                             <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                                <button 
-                                    onClick={(e) => startEditingResource(res, e)}
-                                    className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                                    title="Editar"
-                                >
-                                    <Edit2 size={12} />
-                                </button>
-                                <button 
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      requestDelete('resource', res.id, res.name);
-                                    }}
-                                    className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded"
-                                    title="Eliminar"
-                                >
-                                    <Trash2 size={12} />
-                                </button>
-                             </div>
+                    {/* ACCORDION 2: LISTA DE RECURSOS */}
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                      <button 
+                        onClick={() => setIsResourceListOpen(!isResourceListOpen)}
+                        className={`w-full flex items-center justify-between p-3 text-xs font-bold transition-all ${isResourceListOpen ? 'bg-slate-50 text-blue-600' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <List size={14} className={isResourceListOpen ? 'text-blue-600' : 'text-slate-400'} />
+                          Lista de Recursos ({localResources.length})
+                        </span>
+                        {isResourceListOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
+
+                      {isResourceListOpen && (
+                        <div className="p-2 border-t border-slate-100 bg-white animate-in slide-in-from-top-2">
+                          <div className="space-y-2">
+                            {localResources.map((res, index) => (
+                              <div 
+                                key={res.id} 
+                                onClick={() => { 
+                                  if (activePreview?.id === res.id) {
+                                      setActivePreview(null);
+                                  } else {
+                                      setActivePreview(res); 
+                                      setActiveReport(null); 
+                                      setIsEditingReport(false);
+                                      if (editingResource && editingResource.id !== res.id) cancelEditingResource();
+                                  }
+                                }}
+                                className={`p-3 rounded-xl border cursor-pointer transition-all group ${
+                                    activePreview?.id === res.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 
+                                    editingResource?.id === res.id ? 'bg-yellow-50 border-yellow-200 ring-1 ring-yellow-200' : 
+                                    'bg-white border-gray-100 hover:border-blue-200'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <ResourceIcon type={res.type} />
+                                  <div className="truncate flex-1">
+                                    <p className="text-[11px] font-bold text-slate-800 truncate">{res.name}</p>
+                                    <p className="text-[9px] text-slate-400 uppercase font-semibold">{res.category || 'Otros'}</p>
+                                  </div>
+                                  
+                                  {/* Actions */}
+                                  <div className="flex items-center gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                          onClick={(e) => startEditingResource(res, e)}
+                                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                                          title="Editar"
+                                      >
+                                          <Edit2 size={12} />
+                                      </button>
+                                      <button 
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            requestDelete('resource', res.id, res.name);
+                                          }}
+                                          className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded"
+                                          title="Eliminar"
+                                      >
+                                          <Trash2 size={12} />
+                                      </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            {localResources.length === 0 && (
+                              <div className="flex flex-col items-center justify-center py-6 text-center">
+                                <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-300 mb-2">
+                                  <LinkIcon size={16} />
+                                </div>
+                                <p className="text-xs text-slate-400 italic">No hay recursos vinculados.</p>
+                              </div>
+                            )}
                           </div>
                         </div>
-                      ))}
+                      )}
                     </div>
-                  </div>
+                  </>
                 ) : (
                   <div className="space-y-4">
                     <button 
@@ -671,71 +752,95 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       <Palette size={16} /> Diseñar en Canva
                     </button>
 
-                    <div className="space-y-2">
-                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pt-4">Historial de Reportes</h4>
-                      
-                      {isLoadingReports ? (
-                         <div className="flex justify-center p-4"><Loader2 className="animate-spin text-slate-400" /></div>
-                      ) : reports.length === 0 ? (
-                         <p className="text-xs text-slate-400 text-center italic py-2">No hay reportes creados.</p>
-                      ) : (
-                        reports.map(rep => (
-                            <div 
-                              key={rep.id} 
-                              onClick={() => { 
-                                setActiveReport(rep); 
-                                setIsEditingReport(false); 
-                                setActivePreview(null); 
-                              }}
-                              className={`p-3 rounded-xl border cursor-pointer transition-all group ${activeReport?.id === rep.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-blue-200'}`}
-                            >
-                              <div className="flex justify-between items-start">
-                                <div className="truncate flex-1">
-                                   <p className="text-[11px] font-bold text-slate-800 truncate">{rep.title}</p>
-                                   <p className="text-[9px] text-slate-400 mt-1 font-medium flex justify-between">
-                                     <span>{new Date(rep.created_at).toLocaleDateString()}</span>
-                                     <span className="opacity-70">{rep.author_name}</span>
-                                   </p>
-                                </div>
-                                
-                                <button 
-                                  onClick={(e) => {
-                                      e.stopPropagation();
-                                      requestDelete('report', rep.id, rep.title);
-                                  }}
-                                  className="ml-2 p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
-                                  title="Eliminar Reporte"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            </div>
-                        ))
+                    {/* ACCORDION 3: HISTORIAL DE REPORTES */}
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                      <button 
+                        onClick={() => setIsReportListOpen(!isReportListOpen)}
+                        className={`w-full flex items-center justify-between p-3 text-xs font-bold transition-all ${isReportListOpen ? 'bg-slate-50 text-blue-600' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <List size={14} className={isReportListOpen ? 'text-blue-600' : 'text-slate-400'} />
+                          Historial de Reportes ({reports.length})
+                        </span>
+                        {isReportListOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
+
+                      {isReportListOpen && (
+                        <div className="p-2 border-t border-slate-100 bg-white animate-in slide-in-from-top-2">
+                          <div className="space-y-2">
+                            {isLoadingReports ? (
+                               <div className="flex justify-center p-4"><Loader2 className="animate-spin text-slate-400" /></div>
+                            ) : reports.length === 0 ? (
+                               <div className="flex flex-col items-center justify-center py-6 text-center">
+                                  <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-300 mb-2">
+                                    <FileBarChart size={16} />
+                                  </div>
+                                  <p className="text-xs text-slate-400 italic">No hay reportes creados.</p>
+                               </div>
+                            ) : (
+                              reports.map(rep => (
+                                  <div 
+                                    key={rep.id} 
+                                    onClick={() => { 
+                                      if (activeReport?.id === rep.id) {
+                                          setActiveReport(null);
+                                      } else {
+                                          setActiveReport(rep); 
+                                          setIsEditingReport(false); 
+                                          setActivePreview(null); 
+                                      }
+                                    }}
+                                    className={`p-3 rounded-xl border cursor-pointer transition-all group ${activeReport?.id === rep.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-blue-200'}`}
+                                  >
+                                    <div className="flex justify-between items-start">
+                                      <div className="truncate flex-1">
+                                         <p className="text-[11px] font-bold text-slate-800 truncate">{rep.title}</p>
+                                         <p className="text-[9px] text-slate-400 mt-1 font-medium flex justify-between">
+                                           <span>{new Date(rep.created_at).toLocaleDateString()}</span>
+                                           <span className="opacity-70">{rep.author_name}</span>
+                                         </p>
+                                      </div>
+                                      
+                                      <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            requestDelete('report', rep.id, rep.title);
+                                        }}
+                                        className="ml-2 p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-all"
+                                        title="Eliminar Reporte"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
                 )}
               </div>
-
-              {/* Sidebar Footer Meta */}
-              <div className="p-4 bg-white border-t border-gray-100 text-[10px] text-slate-400">
-                 <div className="flex justify-between mb-1">
-                   <span>Asignado a:</span>
-                   <span className="font-bold text-slate-600">{task.assignee_name || 'Sin asignar'}</span>
-                 </div>
-                 <div className="flex justify-between">
-                   <span>Plazo:</span>
-                   <span className="font-bold text-slate-600">{task.endDate || '--'}</span>
-                 </div>
-              </div>
             </div>
 
             {/* Main Content: Editor or Preview */}
-            <div className="flex-1 bg-slate-100 p-6 overflow-hidden flex flex-col">
+            <div 
+                className="flex-1 bg-slate-100 p-6 overflow-hidden flex flex-col min-h-[50vh] lg:min-h-0"
+                onClick={() => {
+                    if (!isEditingReport) {
+                        setActivePreview(null);
+                        setActiveReport(null);
+                    }
+                }}
+            >
               
               {isEditingReport ? (
-                <div className="h-full flex flex-col space-y-4 animate-in slide-in-from-right-4">
-                  <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                <div 
+                    className="h-full flex flex-col space-y-4 animate-in slide-in-from-right-4"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-3">
                     <input 
                       type="text" 
                       placeholder="Título del Reporte..." 
@@ -744,7 +849,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       className="flex-1 text-lg font-bold outline-none text-slate-800"
                       autoFocus
                     />
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 justify-end">
                       <button 
                         onClick={() => setIsEditingReport(false)}
                         className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
@@ -757,11 +862,11 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                         className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-all shadow-md shadow-blue-200 disabled:opacity-50"
                       >
                         {isSavingReport ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} 
-                        Guardar Reporte
+                        Guardar
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 min-h-0">
+                  <div className="flex-1 min-h-0 bg-white rounded-xl shadow-sm">
                     <RichTextEditor 
                       content={reportContent} 
                       onChange={setReportContent} 
@@ -770,39 +875,45 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                   </div>
                 </div>
               ) : activeReport ? (
-                <div className="h-full bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col animate-in fade-in">
+                <div 
+                    className="h-full bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col animate-in fade-in"
+                    onClick={(e) => e.stopPropagation()}
+                >
                   <div className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
                     <div>
-                      <h3 className="text-xl font-bold text-slate-800">{activeReport.title}</h3>
+                      <h3 className="text-lg sm:text-xl font-bold text-slate-800 truncate max-w-[200px] sm:max-w-md">{activeReport.title}</h3>
                       <p className="text-xs text-slate-400 font-medium">
-                        Publicado por {activeReport.author_name || 'Desconocido'} • {new Date(activeReport.created_at).toLocaleString()}
+                        {activeReport.author_name || 'Desconocido'} • {new Date(activeReport.created_at).toLocaleDateString()}
                       </p>
                     </div>
                     <button 
                       onClick={() => handleEditReport(activeReport)}
                       className="flex items-center gap-2 px-4 py-2 text-blue-600 text-xs font-bold hover:bg-blue-50 rounded-lg transition-colors"
                     >
-                      <FileText size={14} /> Editar Contenido
+                      <FileText size={14} /> <span className="hidden sm:inline">Editar</span>
                     </button>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-10 prose prose-slate max-w-none">
+                  <div className="flex-1 overflow-y-auto p-6 sm:p-10 prose prose-slate max-w-none prose-sm sm:prose-base">
                      {/* Renderizar HTML del reporte */}
                      <div dangerouslySetInnerHTML={{ __html: activeReport.content }} />
                   </div>
                 </div>
               ) : activePreview ? (
-                <div className="h-full bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col animate-in zoom-in-95">
+                <div 
+                    className="h-full bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col animate-in zoom-in-95"
+                    onClick={(e) => e.stopPropagation()}
+                >
                   <div className="px-6 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <div className="flex items-center gap-2 font-bold text-slate-700 text-sm">
+                    <div className="flex items-center gap-2 font-bold text-slate-700 text-sm overflow-hidden">
                       <ResourceIcon type={activePreview.type} />
-                      <span className="truncate max-w-xs">{activePreview.name}</span>
+                      <span className="truncate max-w-[150px] sm:max-w-xs">{activePreview.name}</span>
                     </div>
-                    <div className="flex gap-4">
+                    <div className="flex gap-4 shrink-0">
                       <button onClick={() => setFullScreenResource(activePreview)} className="text-xs font-bold text-slate-500 hover:text-blue-600 flex items-center gap-1">
-                        <Maximize2 size={12} /> Expandir
+                        <Maximize2 size={12} /> <span className="hidden sm:inline">Expandir</span>
                       </button>
                       <a href={activePreview.url} target="_blank" rel="noreferrer" className="text-xs font-bold text-slate-500 hover:text-blue-600 flex items-center gap-1">
-                        <ExternalLink size={12} /> Abrir Original
+                        <ExternalLink size={12} /> <span className="hidden sm:inline">Abrir</span>
                       </a>
                     </div>
                   </div>
@@ -811,16 +922,62 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
-                  <div className="w-20 h-20 bg-white rounded-3xl shadow-sm flex items-center justify-center text-slate-200">
-                    <FileBarChart size={40} />
-                  </div>
-                  <div>
-                    <h3 className="text-slate-800 font-bold">Sin elementos seleccionados</h3>
-                    <p className="text-slate-400 text-sm max-w-xs mx-auto font-medium leading-relaxed">
-                      Selecciona un recurso vinculado o un reporte redactado para visualizar el contenido aquí.
-                    </p>
-                  </div>
+                <div className="h-full overflow-y-auto p-3 sm:p-8 custom-scrollbar flex flex-col items-center justify-start"> {/* Changed alignment to start always to avoid centering issues on small screens with scroll */}
+                   <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sm:p-10 max-w-3xl w-full mx-auto animate-in fade-in zoom-in-95 duration-300">
+                      
+                      {/* Header Section */}
+                      <div className="flex items-start gap-3 sm:gap-4 mb-5 sm:mb-6 border-b border-gray-100 pb-5 sm:pb-6">
+                         <div className="p-2.5 sm:p-3 bg-indigo-50 text-indigo-600 rounded-xl sm:rounded-2xl shrink-0 mt-1">
+                            <AlignLeft className="w-5 h-5 sm:w-7 sm:h-7" />
+                         </div>
+                         <div className="flex-1 min-w-0">
+                            <h3 className="text-lg sm:text-2xl font-bold text-slate-800 mb-1 leading-snug break-words">{task.title}</h3>
+                            <div className="flex flex-wrap gap-2 text-[10px] sm:text-xs font-medium text-slate-500">
+                               <span className="bg-slate-100 px-2 py-1 rounded-md text-slate-600">{task.department}</span>
+                               <span className="hidden sm:inline">•</span>
+                               <span className="bg-purple-50 text-purple-700 px-2 py-1 rounded-md">{task.isSpecificTask ? 'Tarea Específica' : 'Proceso General'}</span>
+                            </div>
+                         </div>
+                      </div>
+                      
+                      {/* Description Section */}
+                      <div className="mb-4">
+                        <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 sm:mb-3">Notas y Contexto</h4>
+                        {task.description ? (
+                          <div className="text-sm sm:text-base text-slate-600 leading-relaxed whitespace-pre-wrap bg-slate-50/50 p-3 sm:p-0 rounded-xl sm:bg-transparent sm:rounded-none border border-slate-100 sm:border-none">
+                             {task.description}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-slate-400 italic text-xs sm:text-sm bg-slate-50 p-3 rounded-xl border border-slate-100 border-dashed">
+                             <Info size={16} /> Sin descripción o notas adicionales registradas.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Metadata Grid - Optimized for Mobile */}
+                      <div className="grid grid-cols-2 gap-3 sm:gap-4 mt-6 sm:mt-8 pt-6 sm:pt-8 border-t border-gray-100">
+                         <div className="col-span-2 sm:col-span-1 flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
+                            <div className="p-2 bg-white rounded-lg text-slate-400 shadow-sm shrink-0"><Calendar size={16} /></div>
+                            <div className="min-w-0">
+                               <p className="text-[10px] font-bold text-slate-400 uppercase">Periodo</p>
+                               <p className="text-xs font-bold text-slate-700 truncate">{task.startDate || 'N/A'} — {task.endDate || 'N/A'}</p>
+                            </div>
+                         </div>
+                         <div className="col-span-2 sm:col-span-1 flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
+                            <div className="p-2 bg-white rounded-lg text-slate-400 shadow-sm shrink-0"><User size={16} /></div>
+                            <div className="min-w-0">
+                               <p className="text-[10px] font-bold text-slate-400 uppercase">Responsable</p>
+                               <p className="text-xs font-bold text-slate-700 truncate">{task.assignee_name || 'Sin asignar'}</p>
+                            </div>
+                         </div>
+                      </div>
+                   </div>
+                   
+                   <div className="mt-6 sm:mt-8 text-center pb-4">
+                      <p className="text-[10px] sm:text-xs text-slate-400 font-medium max-w-xs mx-auto">
+                        Selecciona un elemento del menú lateral para visualizar contenido específico
+                      </p>
+                   </div>
                 </div>
               )}
 
@@ -833,16 +990,16 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       {fullScreenResource && (
         <div className="fixed inset-0 z-[60] bg-slate-950/90 backdrop-blur-md flex flex-col animate-in fade-in duration-300">
           <div className="h-16 flex items-center justify-between px-8 text-white border-b border-white/10">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-4 overflow-hidden">
               <ResourceIcon type={fullScreenResource.type} />
-              <h3 className="font-bold">{fullScreenResource.name}</h3>
+              <h3 className="font-bold truncate">{fullScreenResource.name}</h3>
             </div>
-            <button onClick={() => setFullScreenResource(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+            <button onClick={() => setFullScreenResource(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors shrink-0">
               <X size={24} />
             </button>
           </div>
-          <div className="flex-1 p-8">
-            <div className="w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden">
+          <div className="flex-1 p-4 sm:p-8 overflow-hidden">
+            <div className="w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden relative">
                {renderResourcePreview(fullScreenResource)}
             </div>
           </div>

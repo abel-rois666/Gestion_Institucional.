@@ -304,9 +304,19 @@ function App() {
     }
     setIsLoadingTasks(true);
     try {
+      // MODIFICACIÓN CLAVE: Solicitamos recursos y reportes anidados dentro de subtasks
       const { data, error } = await supabase
         .from('tasks')
-        .select('*, subtasks:tasks(*), resources(*), reports(*)')
+        .select(`
+          *,
+          resources(*),
+          reports(*),
+          subtasks:tasks(
+            *,
+            resources(*),
+            reports(*)
+          )
+        `)
         .is('parent_id', null)
         .order('created_at', { ascending: false });
       
@@ -447,17 +457,21 @@ function App() {
         title: taskData.title, 
         description: taskData.description, 
         department_name: taskData.department, 
-        start_date: taskData.startDate, 
-        end_date: taskData.endDate, 
-        assignee_id: taskData.assignee_id, 
+        start_date: taskData.startDate || null, 
+        end_date: taskData.endDate || null, 
+        assignee_id: taskData.assignee_id || null, 
         assignee_name: taskData.assignee_name, 
         is_specific_task: taskData.isSpecificTask, 
         status: taskData.status, 
         parent_id: parentId || null 
       };
-      await supabase.from('tasks').upsert(dbTask);
+      const { error } = await supabase.from('tasks').upsert(dbTask);
+      if (error) throw error;
       fetchTasks();
-    } catch (err) { console.error(err); }
+    } catch (err: any) { 
+      console.error("Error saving task:", err); 
+      alert(`Error al guardar: ${err.message}`);
+    }
   };
 
   const handleSaveEvent = async (event: Partial<CalendarEvent>) => {
@@ -557,7 +571,10 @@ function App() {
       return;
     }
     const dbField = field === 'startDate' ? 'start_date' : field === 'endDate' ? 'end_date' : field;
-    await supabase.from('tasks').update({ [dbField]: value }).eq('id', taskId);
+    // Sanitization for empty dates in inline updates
+    const sanitizedValue = (dbField === 'start_date' || dbField === 'end_date') && value === '' ? null : value;
+    
+    await supabase.from('tasks').update({ [dbField]: sanitizedValue }).eq('id', taskId);
     fetchTasks();
   };
 
@@ -574,9 +591,9 @@ function App() {
     await supabase.from('tasks').update({
       title: updatedTask.title,
       description: updatedTask.description,
-      start_date: updatedTask.startDate,
-      end_date: updatedTask.endDate,
-      assignee_id: updatedTask.assignee_id,
+      start_date: updatedTask.startDate || null,
+      end_date: updatedTask.endDate || null,
+      assignee_id: updatedTask.assignee_id || null,
       assignee_name: updatedTask.assignee_name,
       status: updatedTask.status
     }).eq('id', updatedTask.id);
