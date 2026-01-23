@@ -119,3 +119,46 @@ export interface Message {
   created_at: string;
   profile?: Profile;
 }
+
+// --- INVENTORY SYSTEM ---
+
+export interface InventoryCategory {
+  id: string;
+  name: string;
+  prefix: string; // ej: PAP, LIM, TEC
+  current_sequence: number;
+}
+
+export interface InventoryItem {
+  id: string;
+  code: string;
+  name: string;
+  category: string; // Guarda el nombre por simplicidad visual, o ID si prefieres normalizar
+  description?: string;
+  // UI Helper: Quantity is now derived from InventoryStock, but we keep it optional for UI display logic
+  quantity?: number; 
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InventoryStock {
+  id: string;
+  item_id: string;
+  department: string; // 'Bodega General' or DepartmentEnum
+  quantity: number;
+}
+
+export interface Requisition {
+  id: string;
+  requester_id: string;
+  requester_name: string;
+  department: Department;
+  target_department?: string; // Nuevo campo: A quién va dirigida
+  item_id: string;
+  item_name?: string; // Joined field
+  quantity: number;
+  justification: string;
+  observations?: string;
+  status: 'Pendiente' | 'Aprobada' | 'Rechazada' | 'Entregada';
+  created_at: string;
+}

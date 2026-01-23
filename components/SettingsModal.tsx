@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
-import { X, Save, Settings, Plus, Trash2, Tag, Building2, Monitor, Globe, Users, Search, UserPlus, Edit3, Shield, Check, AlertTriangle, CalendarDays, Palette } from 'lucide-react';
-import { AppSettings, Profile, UserRole, ResourceCategory, DepartmentEnum, EventCategory } from '../types';
+import React, { useState, useEffect } from 'react';
+import { X, Save, Settings, Plus, Trash2, Tag, Building2, Monitor, Globe, Users, Search, UserPlus, Edit3, Shield, Check, AlertTriangle, CalendarDays, Palette, Package } from 'lucide-react';
+import { AppSettings, Profile, UserRole, ResourceCategory, DepartmentEnum, EventCategory, InventoryCategory } from '../types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -56,7 +57,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveEventCategory,
   onDeleteEventCategory
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'departments' | 'resources' | 'events' | 'users'>(
+  const isHRorAdmin = currentUser.role === UserRole.ADMIN || currentUser.department === DepartmentEnum.HR_MATERIALS;
+
+  const [activeTab, setActiveTab] = useState<'general' | 'departments' | 'resources' | 'events' | 'users' | 'inventory'>(
     currentUser.role === UserRole.ADMIN ? 'general' : 'resources'
   );
   
@@ -70,13 +73,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [newEventCatName, setNewEventCatName] = useState('');
   const [newEventCatColor, setNewEventCatColor] = useState('blue');
 
+  // Inventory Categories Logic
+  const [invCategories, setInvCategories] = useState<InventoryCategory[]>([]);
+  const [newInvCatName, setNewInvCatName] = useState('');
+  const [newInvCatPrefix, setNewInvCatPrefix] = useState('');
+
   // Editing State
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [editValue2, setEditValue2] = useState(''); // Used for prefix
   const [editColor, setEditColor] = useState('');
 
   // Delete Confirmation State
-  const [pendingDelete, setPendingDelete] = useState<{ type: 'dept' | 'cat' | 'user' | 'event_cat', id: string, name: string, count: number } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ type: 'dept' | 'cat' | 'user' | 'event_cat' | 'inv_cat', id: string, name: string, count: number } | null>(null);
 
   // User Management Logic
   const [userSearchTerm, setUserSearchTerm] = useState('');
@@ -87,15 +96,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     department: DepartmentEnum.ACADEMIC
   });
 
+  useEffect(() => {
+      if (isOpen && isHRorAdmin && isSupabaseConfigured) {
+          fetchInventoryCategories();
+      }
+  }, [isOpen, isHRorAdmin]);
+
+  const fetchInventoryCategories = async () => {
+      const { data } = await supabase.from('inventory_categories').select('*').order('name');
+      if (data) setInvCategories(data);
+  };
+
   if (!isOpen) return null;
 
   // -- Unified Delete Logic --
   
-  const requestDelete = (type: 'dept' | 'cat' | 'user' | 'event_cat', id: string, name: string, count: number = 0) => {
+  const requestDelete = (type: 'dept' | 'cat' | 'user' | 'event_cat' | 'inv_cat', id: string, name: string, count: number = 0) => {
     setPendingDelete({ type, id, name, count });
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!pendingDelete) return;
 
     if (pendingDelete.type === 'dept') {
@@ -110,9 +130,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       onDeleteUser(pendingDelete.id);
     } else if (pendingDelete.type === 'event_cat') {
       onDeleteEventCategory(pendingDelete.id);
+    } else if (pendingDelete.type === 'inv_cat') {
+        if (isSupabaseConfigured) {
+            await supabase.from('inventory_categories').delete().eq('id', pendingDelete.id);
+            fetchInventoryCategories();
+        }
     }
     
     setPendingDelete(null);
+  };
+
+  // -- Inventory Categories Handlers --
+  const handleAddInvCategory = async () => {
+      if (!newInvCatName.trim() || !newInvCatPrefix.trim()) return;
+      if (isSupabaseConfigured) {
+          await supabase.from('inventory_categories').insert({
+              name: newInvCatName.trim(),
+              prefix: newInvCatPrefix.trim().toUpperCase(),
+              current_sequence: 0
+          });
+          fetchInventoryCategories();
+      }
+      setNewInvCatName('');
+      setNewInvCatPrefix('');
+  };
+
+  const startEditInvCat = (cat: InventoryCategory) => {
+      setEditingItem(cat.id);
+      setEditValue(cat.name);
+      setEditValue2(cat.prefix);
+  };
+
+  const saveEditInvCat = async (cat: InventoryCategory) => {
+      if (editValue.trim() && editValue2.trim()) {
+          if (isSupabaseConfigured) {
+              await supabase.from('inventory_categories').update({
+                  name: editValue.trim(),
+                  prefix: editValue2.trim().toUpperCase()
+              }).eq('id', cat.id);
+              fetchInventoryCategories();
+          }
+      }
+      setEditingItem(null);
   };
 
   // -- Event Categories Handlers --
@@ -313,6 +372,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           )}
           <button onClick={() => setActiveTab('resources')} className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'resources' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}><Tag size={14} /> Recursos</button>
           <button onClick={() => setActiveTab('events')} className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'events' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}><CalendarDays size={14} /> Eventos</button>
+          {isHRorAdmin && (
+              <button onClick={() => setActiveTab('inventory')} className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'inventory' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}><Package size={14} /> Inventario</button>
+          )}
           {currentUser.role === UserRole.ADMIN && (
             <button onClick={() => setActiveTab('users')} className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}><Users size={14} /> Usuarios</button>
           )}
@@ -386,7 +448,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           )}
 
-          {/* EVENT CATEGORIES (NEW TAB) */}
+          {/* INVENTORY CATEGORIES (NEW) */}
+          {activeTab === 'inventory' && isHRorAdmin && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-left-4">
+                  <div className="flex gap-2">
+                      <div className="flex-1 flex gap-2">
+                          <input 
+                              type="text" 
+                              value={newInvCatName} 
+                              onChange={e => setNewInvCatName(e.target.value)} 
+                              placeholder="Nombre de categoría (ej. Papelería)" 
+                              className="flex-[2] bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                          />
+                          <input 
+                              type="text" 
+                              value={newInvCatPrefix} 
+                              onChange={e => setNewInvCatPrefix(e.target.value.toUpperCase())} 
+                              placeholder="Prefijo (ej. PAP)" 
+                              maxLength={4}
+                              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono uppercase" 
+                          />
+                      </div>
+                      <button onClick={handleAddInvCategory} className="bg-blue-600 text-white px-4 rounded-xl hover:bg-blue-700 transition-all"><Plus size={20} /></button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                      {invCategories.map(cat => (
+                          <div key={cat.id} className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:border-blue-200 transition-all">
+                              <div className="flex items-center gap-3 flex-1">
+                                  <div className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center font-bold text-xs shadow-sm">
+                                      {cat.prefix}
+                                  </div>
+                                  {editingItem === cat.id ? (
+                                      <div className="flex-1 flex gap-2">
+                                          <input type="text" value={editValue} onChange={e => setEditValue(e.target.value)} className="flex-[2] border-b border-blue-500 bg-transparent outline-none text-sm font-bold" autoFocus />
+                                          <input type="text" value={editValue2} onChange={e => setEditValue2(e.target.value.toUpperCase())} maxLength={4} className="flex-1 border-b border-blue-500 bg-transparent outline-none text-sm font-mono uppercase" />
+                                      </div>
+                                  ) : (
+                                      <div className="flex flex-col">
+                                          <span className="text-sm font-bold text-slate-700">{cat.name}</span>
+                                          <span className="text-[10px] text-slate-400">Secuencia actual: {cat.current_sequence}</span>
+                                      </div>
+                                  )}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                  {editingItem === cat.id ? (
+                                      <>
+                                          <button onClick={() => saveEditInvCat(cat)} className="p-2 text-green-500 hover:bg-green-50 rounded-lg"><Check size={16} /></button>
+                                          <button onClick={() => setEditingItem(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
+                                      </>
+                                  ) : (
+                                      <>
+                                          <button onClick={() => startEditInvCat(cat)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit3 size={16} /></button>
+                                          <button onClick={() => requestDelete('inv_cat', cat.id, cat.name)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                                      </>
+                                  )}
+                              </div>
+                          </div>
+                      ))}
+                      {invCategories.length === 0 && <p className="text-center text-xs text-slate-400 italic">No hay categorías de inventario.</p>}
+                  </div>
+              </div>
+          )}
+
+          {/* EVENT CATEGORIES */}
           {activeTab === 'events' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-left-4">
                <div className="flex gap-2">
@@ -444,7 +569,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                        </div>
                     </div>
                   ))}
-                  {eventCategories.length === 0 && <p className="text-center text-xs text-slate-400 italic">No hay categorías de eventos definidas.</p>}
                </div>
             </div>
           )}
@@ -532,7 +656,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                  </>
                ) : (
                  <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100 animate-in slide-in-from-top-4">
-                    {/* User Form Content ... Same as before */}
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-blue-100">
                       <h3 className="text-sm font-bold text-blue-900 flex items-center gap-2">
                         {editingUserId ? <Edit3 size={16} /> : <UserPlus size={16} />}

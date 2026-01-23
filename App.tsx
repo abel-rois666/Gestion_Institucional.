@@ -11,6 +11,7 @@ import { TaskDetailModal } from './components/TaskDetailModal';
 import { CalendarView } from './components/CalendarView';
 import { ChatView } from './components/ChatView';
 import { WelcomeSummaryModal } from './components/WelcomeSummaryModal';
+import { InventoryRequisitionPanel } from './components/InventoryRequisitionPanel';
 import { generateEfficiencyReport } from './services/geminiService';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { 
@@ -136,7 +137,8 @@ function App() {
   const [users, setUsers] = useState<Profile[]>([
     { id: 'u-1', full_name: 'Dr. Alejandro García', email: 'director@uni.edu', department: DepartmentEnum.DIRECTION, role: UserRole.ADMIN, avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alejandro' },
     { id: 'u-2', full_name: 'Lic. Martha Ruiz', email: 'coordinador@uni.edu', department: DepartmentEnum.ACADEMIC, role: UserRole.COORDINATOR, avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Martha' },
-    { id: 'u-3', full_name: 'Juan Pérez', email: 'auxiliar@uni.edu', department: DepartmentEnum.ACADEMIC, role: UserRole.AUXILIAR, avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Juan' }
+    { id: 'u-3', full_name: 'Juan Pérez', email: 'auxiliar@uni.edu', department: DepartmentEnum.ACADEMIC, role: UserRole.AUXILIAR, avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Juan' },
+    { id: 'u-4', full_name: 'Lic. Recursos Humanos', email: 'rh@uni.edu', department: DepartmentEnum.HR_MATERIALS, role: UserRole.COORDINATOR, avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=RH' }
   ]);
   
   const [currentUser, setCurrentUser] = useState<Profile>(users[0]);
@@ -154,6 +156,7 @@ function App() {
        [DepartmentEnum.PUBLICITY]: { enableEvents: true },
        [DepartmentEnum.FINANCE]: { enableEvents: true },
        [DepartmentEnum.ACADEMIC]: { enableEvents: true },
+       [DepartmentEnum.HR_MATERIALS]: { enableEvents: true },
        [DepartmentEnum.TUTORING_WELLBEING]: { enableEvents: true },
        [DepartmentEnum.DIRECTION]: { enableEvents: true },
     }
@@ -545,7 +548,6 @@ function App() {
       }
   };
 
-  // ... (Rest of existing handlers: handleStatusChange, etc. - kept as is)
   const handleStatusChange = async (taskId: string, newStatus: TaskStatus) => {
     if (!isSupabaseConfigured) {
       const updateRecursive = (list: Task[]): Task[] => list.map(t => {
@@ -1020,7 +1022,7 @@ function App() {
                         onClick={() => { setViewMode('CHAT'); setIsNotifDropdownOpen(false); }}
                         className="text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors w-full py-1"
                        >
-                         Ir a Mensajes
+                         Ir al Chat
                        </button>
                     </div>
                   </div>
@@ -1072,6 +1074,12 @@ function App() {
                 </div>
                 {aiReport && <div className="p-5 bg-purple-50 rounded-2xl border border-purple-100 text-slate-800 text-sm leading-relaxed whitespace-pre-line animate-in fade-in duration-500 prose prose-slate prose-sm max-w-none">{aiReport}</div>}
               </div>
+
+               {/* --- INVENTORY & REQUISITIONS --- */}
+               <InventoryRequisitionPanel 
+                  currentUser={currentUser} 
+                  viewContext={activeTab} // PASSED ACTIVE TAB AS CONTEXT
+               />
 
                <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <h2 className="text-lg font-bold text-slate-800">Gestión Operativa</h2>

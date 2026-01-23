@@ -1,22 +1,18 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Task, TaskStatus, Profile, UserRole, DepartmentEnum, CalendarEvent, EventCategory } from '../types';
+import { Pagination } from './Pagination';
 import { 
   Calendar, 
   User, 
   ChevronDown, 
-  ChevronRight, 
-  CornerDownRight, 
   Edit2,
   Eye,
   Check,
   Search,
-  Layers,
   List,
-  Target,
   ArrowUpDown,
   Filter,
-  X,
   Settings2,
   CheckCircle2,
   RefreshCcw,
@@ -184,12 +180,21 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
   const [showFilters, setShowFilters] = useState(false);
   const [showColPicker, setShowColPicker] = useState(false);
   
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10); // Added State
+
   const [filterStatus, setFilterStatus] = useState<string>('Todos');
   const [filterType, setFilterType] = useState<string>('Todos');
   const [filterDept, setFilterDept] = useState<string>('Todos');
 
   const defaultColsIds = useMemo(() => new Set(COLUMNS_SCHEMA.filter(c => c.isDefault).map(c => c.id)), []);
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(defaultColsIds);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterStatus, filterType, filterDept, listMode, itemsPerPage]);
 
   const resetToDefaultColumns = () => {
     setVisibleColumns(new Set(defaultColsIds));
@@ -216,7 +221,6 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
     };
     
     const start = formatDate(event.start_date);
-    // Default 1 hour if no end date
     const end = event.end_date ? formatDate(event.end_date) : new Date(new Date(event.start_date).getTime() + 3600000).toISOString().replace(/-|:|\.\d\d\d/g, "");
     
     const details = encodeURIComponent(event.description || '');
@@ -236,6 +240,7 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
     return cat ? cat.name : 'Evento';
   }
 
+  // --- FILTERING & SORTING LOGIC ---
   const processedTasks = useMemo(() => {
     let result = [...tasks];
     if (searchTerm) {
@@ -271,6 +276,13 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
       result.sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
       return result;
   }, [events, searchTerm]);
+
+  // --- PAGINATION LOGIC ---
+  const currentData = listMode === 'TASKS' ? processedTasks : processedEvents;
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return currentData.slice(startIndex, startIndex + itemsPerPage);
+  }, [currentData, currentPage, itemsPerPage]);
 
   const HeaderButton: React.FC<{ label: string, sKey: SortKey }> = ({ label, sKey }) => (
     <button onClick={() => handleSort(sKey)} className="flex items-center gap-1.5 hover:text-blue-600 transition-colors group">
@@ -410,7 +422,7 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
       )}
 
       {/* Contenedor de Vista Híbrida (Tabla/Tarjetas) */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
         
         {/* VISTA DESKTOP (TABLA): Scroll horizontal asegurado */}
         <div className="hidden lg:block overflow-x-auto">
@@ -428,7 +440,7 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
                 </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                {processedTasks.length > 0 ? processedTasks.map(task => {
+                {paginatedData.length > 0 ? (paginatedData as Task[]).map(task => {
                     const completedSub = task.subtasks?.filter(s => s.status === TaskStatus.COMPLETED).length || 0;
                     const totalSub = task.subtasks?.length || 0;
                     const percent = totalSub > 0 ? Math.round((completedSub / totalSub) * 100) : 0;
@@ -499,7 +511,7 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                    {processedEvents.length > 0 ? processedEvents.map(event => (
+                    {paginatedData.length > 0 ? (paginatedData as CalendarEvent[]).map(event => (
                         <tr key={event.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="px-6 py-4">
                                 <div className="font-bold text-sm text-slate-900">{event.title}</div>
@@ -566,9 +578,9 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
         {/* VISTA MÓVIL/TABLET (TARJETAS) */}
         <div className="lg:hidden p-4 bg-slate-50/40">
           {listMode === 'TASKS' ? (
-            processedTasks.length > 0 ? (
+            paginatedData.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {processedTasks.map(task => (
+                    {(paginatedData as Task[]).map(task => (
                     <TaskCard 
                         key={task.id} 
                         task={task} 
@@ -581,9 +593,9 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
                 </div>
             ) : <EmptyState />
           ) : (
-             processedEvents.length > 0 ? (
+             paginatedData.length > 0 ? (
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                     {processedEvents.map(event => (
+                     {(paginatedData as CalendarEvent[]).map(event => (
                          <div key={event.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
                              <div className="flex justify-between items-start mb-3 gap-2">
                                  <h4 className="font-bold text-slate-800 text-sm leading-snug">{event.title}</h4>
@@ -609,6 +621,17 @@ export const ProcessList: React.FC<ProcessListProps> = ({ tasks, events = [], ev
                  </div>
              ) : <EmptyState />
           )}
+        </div>
+
+        {/* PAGINATION CONTROLS */}
+        <div className="bg-white rounded-b-2xl">
+            <Pagination 
+                currentPage={currentPage}
+                totalItems={currentData.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setCurrentPage}
+                onItemsPerPageChange={setItemsPerPage}
+            />
         </div>
       </div>
     </div>
